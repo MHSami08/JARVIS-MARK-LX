@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="bn" class="dark">
+<head>
+<meta charset="utf-8">
+<title>JARVIS Study Board</title>
+<link rel="stylesheet" href="vendor/katex/katex.min.css">
+<script src="vendor/katex/katex.min.js"></script>
+<script src="vendor/katex/auto-render.min.js"></script>
+<script src="vendor/plotly/plotly.min.js"></script>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%; margin: 0; background: #02060d; color: #d7e6f5;
+    font-family: "Nirmala UI", "Noto Sans Bengali", "Segoe UI", system-ui, sans-serif;
+    user-select: text; overflow: hidden;
+  }
+  #app { display: flex; flex-direction: column; height: 100%; }
+  header, footer {
+    padding: 8px 16px; background: #04101c; display: flex; align-items: center; gap: 8px;
+  }
+  header { border-bottom: 1px solid #0f3350; flex-wrap: wrap; }
+  footer { border-top: 1px solid #0f3350; }
+  #title { font-weight: 700; letter-spacing: .04em; flex: 1; color: #e6edf3; font-size: 15px; min-width: 140px; }
+  .badge {
+    font-size: 11px; color: #00d4ff; background: rgba(0,212,255,0.08);
+    border: 1px solid #0f3350; border-radius: 999px; padding: 3px 10px; font-weight: 600;
+  }
+
+  /* Zoom & Toolbar Controls */
+  .zoom-group {
+    display: inline-flex; align-items: center; background: #07192b;
+    border: 1px solid #144973; border-radius: 7px; overflow: hidden; margin-left: 6px;
+  }
+  .zoom-btn {
+    background: transparent; color: #00d4ff; border: none; border-radius: 0;
+    padding: 4px 10px; font-size: 15px; font-weight: 800; cursor: pointer; line-height: 1;
+  }
+  .zoom-btn:hover { background: #0f3350; color: #ffffff; }
+  #zoom-lbl {
+    font-size: 12px; font-weight: 700; color: #d7e6f5; padding: 0 8px;
+    min-width: 48px; text-align: center; cursor: pointer; user-select: none;
+  }
+  #zoom-lbl:hover { color: #00d4ff; }
+
+  .hdr-sep {
+    width: 1px; height: 22px; background: #143b5c; margin: 0 10px;
+  }
+
+  /* Safe Separation for Quit Study Mode Button */
+  #btn-reset {
+    background: #082238; color: #9adfff; border: 1px solid #17517e;
+    padding: 5px 12px; font-weight: 600;
+  }
+  #btn-reset:hover { background: #0e3554; border-color: #00d4ff; color: #ffffff; }
+
+  #btn-exit {
+    margin-left: 16px;
+    background: rgba(255, 51, 85, 0.12);
+    color: #ff8a9b;
+    border: 1px solid rgba(255, 51, 85, 0.45);
+    font-weight: 700;
+    padding: 5px 14px;
+  }
+  #btn-exit:hover {
+    background: rgba(255, 51, 85, 0.28);
+    border-color: #ff3355;
+    color: #ffffff;
+  }
+
+  #board {
+    flex: 1; overflow: auto; padding: 20px; scroll-behavior: smooth;
+    zoom: 1.1; /* Default 110% for comfortable reading */
+  }
+
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .card {
+    background: #061827; border: 1px solid #0f3350; border-radius: 10px;
+    padding: 16px 20px; margin: 0 auto 16px; max-width: 980px;
+    line-height: 1.8; font-size: 17.5px; animation: fadeInUp 0.2s ease-out;
+  }
+  .card h2 { margin: 0 0 10px; font-size: 16.5px; color: #00d4ff; letter-spacing: .03em; }
+  .card p { margin: .45em 0; }
+  .card ul, .card ol { margin: .45em 0 .45em 1.4em; padding: 0; }
+  .card code {
+    background: #0a2236; color: #7ce0ff; padding: 2px 6px; border-radius: 4px;
+    font-family: "Cascadia Code", Consolas, monospace; font-size: 15px;
+  }
+  .code-block {
+    background: #030b14; border: 1px solid #123654; border-radius: 8px;
+    padding: 14px 16px; margin: 10px 0; overflow-x: auto;
+    font-family: "Cascadia Code", Consolas, monospace; font-size: 14.5px;
+    color: #c9e5ff; line-height: 1.6; white-space: pre;
+  }
+  table.md-table {
+    width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 15.5px;
+  }
+  table.md-table th, table.md-table td {
+    border: 1px solid #143b5c; padding: 9px 13px; text-align: left;
+  }
+  table.md-table th { background: #09243a; color: #00d4ff; font-weight: 700; }
+  table.md-table tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+  .dm { overflow-x: auto; padding: 8px 0; font-size: 19px; }
+  .status { text-align: center; color: #6f93ad; margin-top: 18vh; font-size: 16px; white-space: pre-line; }
+
+  button {
+    background: #0a2236; color: #bfe6ff; border: 1px solid #14527f; border-radius: 6px;
+    padding: 5px 14px; font-size: 13px; cursor: pointer; transition: all 0.15s;
+  }
+  button:hover:not(:disabled) { background: #0f3350; border-color: #00d4ff; }
+  button:disabled { opacity: .35; cursor: default; }
+  #prog { color: #8b98a6; font-size: 12.5px; flex: 1; }
+
+  .quiz-opt {
+    display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+    background: #081e30; border: 1px solid #143d5e; border-radius: 8px;
+    padding: 12px 16px; margin: 9px 0; font-size: 16.5px; color: #d7e6f5; cursor: pointer;
+  }
+  .quiz-opt:hover:not(.locked) { background: #0c2b44; border-color: #00d4ff; }
+  .quiz-key {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; border-radius: 6px; background: #04121e;
+    border: 1px solid #1f5582; color: #00d4ff; font-weight: 700; font-size: 14px; flex-shrink: 0;
+  }
+  .quiz-opt.correct { background: rgba(0, 255, 136, 0.14); border-color: #00ff88; color: #ffffff; }
+  .quiz-opt.correct .quiz-key { background: #00ff88; color: #02140b; border-color: #00ff88; }
+  .quiz-opt.wrong { background: rgba(255, 51, 85, 0.15); border-color: #ff3355; color: #ffb3c0; }
+  .quiz-opt.wrong .quiz-key { background: #ff3355; color: #ffffff; border-color: #ff3355; }
+  .quiz-explain {
+    margin-top: 12px; padding: 12px 16px; border-radius: 8px;
+    background: rgba(0, 212, 255, 0.08); border-left: 3px solid #00d4ff; font-size: 15.5px;
+  }
+
+  .flash-wrap { max-width: 740px; margin: 3vh auto; cursor: pointer; }
+  .flash-box {
+    min-height: 290px; display: flex; flex-direction: column; justify-content: center;
+    align-items: center; text-align: center; padding: 34px 30px;
+    background: linear-gradient(145deg, #071b2c, #04111d);
+    border: 1px solid #19517d; border-radius: 14px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  }
+  .flash-tag {
+    font-size: 11.5px; letter-spacing: 0.12em; color: #00d4ff; margin-bottom: 18px;
+    font-weight: 700; background: rgba(0,212,255,0.1); padding: 4px 12px; border-radius: 99px;
+  }
+  .flash-text {
+    font-size: 23px; line-height: 1.85; color: #ffffff; width: 100%; overflow-x: auto;
+  }
+  .flash-text .katex { font-size: 1.35em !important; }
+  .flash-text .katex-display { margin: 0.5em 0 !important; }
+  .flash-hint {
+    margin-top: 24px; font-size: 12.5px; color: #6f93ad;
+    border-top: 1px solid #0e2d47; padding-top: 12px; width: 80%;
+  }
+
+  /* 2D Visual Mindmap Tree Template */
+  .mm-canvas {
+    width: 100%; overflow-x: auto; padding: 20px 10px 30px;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  .mm-root-box {
+    background: linear-gradient(135deg, rgba(0, 212, 255, 0.24), rgba(0, 110, 180, 0.18));
+    border: 2px solid #00d4ff; color: #ffffff; font-weight: 700; font-size: 19px;
+    padding: 12px 28px; border-radius: 12px; text-align: center;
+    box-shadow: 0 0 24px rgba(0, 212, 255, 0.25); position: relative; z-index: 2;
+  }
+  .mm-trunk { width: 2px; height: 28px; background: #00d4ff; }
+  .mm-branches {
+    display: flex; flex-direction: row; justify-content: space-between; align-items: stretch;
+    gap: 14px; position: relative; padding-top: 22px; width: 100%; flex-wrap: nowrap;
+  }
+  .mm-col {
+    flex: 1 1 0; min-width: 185px; display: flex; flex-direction: column;
+    align-items: center; position: relative;
+  }
+  .mm-col::before {
+    content: ""; position: absolute; top: -22px; left: 50%; transform: translateX(-50%);
+    width: 2px; height: 22px; background: #00d4ff;
+  }
+  .mm-col::after {
+    content: ""; position: absolute; top: -22px; left: 0; right: 0;
+    height: 2px; background: #00d4ff;
+  }
+  .mm-col:first-child::after { left: 50%; }
+  .mm-col:last-child::after { right: 50%; }
+  .mm-col:only-child::after { display: none; }
+  .mm-branch-head {
+    width: 100%; background: #09263d; border: 1.5px solid #00a8cc;
+    border-top: 3px solid #00d4ff; border-radius: 10px; padding: 10px 14px;
+    text-align: center; font-weight: 700; font-size: 16px; color: #ffffff;
+    box-shadow: 0 6px 16px rgba(0,0,0,0.35); position: relative;
+  }
+  .mm-branch-num {
+    display: inline-block; background: #00d4ff; color: #02101c; font-size: 11.5px;
+    font-weight: 800; border-radius: 99px; padding: 1px 7px; margin-right: 6px;
+    vertical-align: middle;
+  }
+  .mm-leaf-list {
+    width: 92%; display: flex; flex-direction: column; gap: 10px;
+    padding-top: 14px; padding-left: 16px; border-left: 2px solid #1b5682;
+    margin-top: 2px;
+  }
+  .mm-leaf {
+    background: #051624; border: 1px solid #153e5e; border-radius: 8px;
+    padding: 9px 13px; font-size: 15px; color: #d0e5f7; position: relative;
+    line-height: 1.55; box-shadow: 0 3px 8px rgba(0,0,0,0.25);
+  }
+  .mm-leaf::before {
+    content: ""; position: absolute; left: -17px; top: 16px;
+    width: 16px; height: 2px; background: #1b5682;
+  }
+  .mm-leaf::after {
+    content: ""; position: absolute; left: -4px; top: 13px;
+    width: 6px; height: 6px; border-radius: 50%; background: #00d4ff;
+  }
+  .mm-subleaf-list {
+    margin-top: 6px; padding-left: 12px; border-left: 1px dashed #236696;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .mm-subleaf { font-size: 13.5px; color: #9fc6e6; padding: 2px 0; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <span id="title">STUDY STATION</span>
+    <span id="mode-badge" class="badge">BOARD</span>
+    <span id="chip" class="badge" style="display:none"></span>
+
+    <!-- Text / Board Zoom Control -->
+    <div class="zoom-group" title="Zoom In / Out [Ctrl + / Ctrl - / Click % to Reset]">
+      <button id="btn-zoom-out" class="zoom-btn" title="Zoom Out [Ctrl -]">−</button>
+      <span id="zoom-lbl" title="Click to reset zoom [Ctrl + 0]">110%</span>
+      <button id="btn-zoom-in" class="zoom-btn" title="Zoom In [Ctrl +]">+</button>
+    </div>
+
+    <button id="btn-reset" title="Clear current board content [Ctrl+R]">↻ Reset Board</button>
+    <div class="hdr-sep"></div>
+    <button id="btn-exit" title="Leave Study Mode and return to normal HUD [F8]">✕ Quit Study Mode</button>
+  </header>
+  <main id="board"><div class="status">Ask a question to start.</div></main>
+  <footer>
+    <span id="prog"></span>
+    <button id="btn-prev" style="display:none">◂ Prev</button>
+    <button id="btn-explain" disabled>Explain this step</button>
+    <button id="btn-next" disabled>Next step ▸</button>
+  </footer>
+</div>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/* ---- Board Zoom Controller ---- */
+let currentZoom = 110;
+try {
+  const savedZ = parseInt(localStorage.getItem("jarvis_study_zoom") || "110", 10);
+  if (savedZ >= 70 && savedZ <= 200) currentZoom = savedZ;
+} catch (e) {}
+
+function applyZoom(val) {
+  currentZoom = Math.max(70, Math.min(200, Math.round(val / 10) * 10));
+  $("board").style.zoom = (currentZoom / 100).toFixed(2);
+  $("zoom-lbl").textContent = `${currentZoom}%`;
+  try { localStorage.setItem("jarvis_study_zoom", String(currentZoom)); } catch (e) {}
+}
+applyZoom(currentZoom);
+
+$("btn-zoom-in").onclick = () => applyZoom(currentZoom + 10);
+$("btn-zoom-out").onclick = () => applyZoom(currentZoom - 10);
+$("zoom-lbl").onclick = () => applyZoom(110);
+
+function repairCorruptedLatex(str) {
+  return String(str || "")
+    .replace(/\x0c(rac|orall|lat)/g, "\\f$1")
+    .replace(/\x08(eta|ar|inom|egin|f)/g, "\\b$1")
+    .replace(/\t(an|heta|au|ext|imes|o)/g, "\\t$1")
+    .replace(/\r(ho|ight)/g, "\\r$1")
+    .replace(/\n(eq|u|abla)/g, "\\n$1");
+}
+
+function convertPlainMathToTex(expr) {
+  let t = expr.trim();
+  t = t.replace(/\b(sin|cos|tan|cot|sec|csc|cosec)\s*\^\s*\{\s*-1\s*\}/gi, "\\$1^{-1}");
+  t = t.replace(/\b(sin|cos|tan|cot|sec|csc|cosec)\s*\^\s*-1/gi, "\\$1^{-1}");
+  t = t.replace(/\b(sin|cos|tan|cot|sec|csc|cosec)\b/gi, "\\$1");
+  t = t.replace(/\bsqrt\s*\(([^()]+)\)/gi, "\\sqrt{$1}");
+  t = t.replace(/([a-zA-Z])(\d+)\b/g, "$1_{$2}");
+  t = t.replace(/\^\s*(-?\d+|\([^()]+\))/g, (_m, p1) => `^{${p1.replace(/^\(\vert{}\)$/g, "")}}`);
+  for (let pass = 0; pass < 2; pass++) {
+    t = t.replace(/\(([^()]+)\)\s*\/\s*\(([^()]+)\)/g, "\\frac{$1}{$2}");
+    t = t.replace(/([a-zA-Z0-9_{}^\\]+)\s*\/\s*\(([^()]+)\)/g, "\\frac{$1}{$2}");
+    t = t.replace(/\(([^()]+)\)\s*\/\s*([a-zA-Z0-9_{}^\\]+)/g, "\\frac{$1}{$2}");
+    t = t.replace(/([a-zA-Z0-9_{}^]+)\s*\/\s*([a-zA-Z0-9_{}^]+)/g, "\\frac{$1}{$2}");
+  }
+  return t;
+}
+
+function autoLatexFormula(raw) {
+  let s = repairCorruptedLatex(raw).trim();
+  if (!s || /\$|\\\[|\\\(/.test(s)) return s;
+  s = s.replace(/\(([A-Za-z0-9_+\-*/^=\s\\]+)\)/g, (full, inner) => {
+    if (/[=^\/]/.test(inner) && /[A-Za-z0-9]/.test(inner)) {
+      return `($${convertPlainMathToTex(inner)}$)`;
+    }
+    return full;
+  });
+  const looksLikePureMath =
+    !/[\u0980-\u09FF]/.test(s) && s.length < 95 &&
+    (/(\^|\b(?:sin|cos|tan|cot|sec|cosec|ln|log|lim)\b|[a-zA-Z0-9_)\]]\s*\/\s*[a-zA-Z0-9_(\[])/.test(s));
+  if (looksLikePureMath && !s.includes("$")) {
+    return `$$${convertPlainMathToTex(s)}$$`;
+  }
+  return s;
+}
+
+const inline = (s) => esc(autoLatexFormula(s))
+  .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+  .replace(/`([^`]+)`/g, "<code>$1</code>");
+
+const MATH = { throwOnError: false, delimiters: [
+  { left: "$$", right: "$$", display: true }, { left: "[", right: "]", display: true },
+  { left: "$", right: "$", display: false }, { left: "\\(", right: "\\)", display: false }] };
+
+let bridge = null, activeMode = "board";
+let sections = [], shown = 0;
+let quizState = null;
+let flashState = null;
+
+function setModeBadge(text) { $("mode-badge").textContent = text; }
+function typeset(el) {
+  if (typeof renderMathInElement !== "undefined") {
+    try { renderMathInElement(el, MATH); } catch (e) {}
+  }
+}
+
+function blocks(src) {
+  const maths = [], plots = [], codes = [];
+  src = String(src || "").replace(/```plot\s*([\s\S]*?)```/g, (_m, j) => {
+    plots.push(j.trim()); return `\n\u0002${plots.length - 1}\u0002\n`;
+  });
+  src = src.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (_m, _lang, code) => {
+    codes.push(code.replace(/\n$/, "")); return `\n\u0003${codes.length - 1}\u0003\n`;
+  });
+  src = src.replace(/\$\$[\s\S]+?\$\$/g, (m) => {
+    maths.push(m); return `\n\u0001${maths.length - 1}\u0001\n`;
+  });
+
+  const out = []; let para = [], list = null, tbl = [];
+  const flushP = () => { if (para.length) { out.push(`<p>${inline(para.join(" "))}</p>`); para = []; } };
+  const flushL = () => { if (list) { out.push(`<${list.t}>${list.i.map((x) => `<li>${inline(x)}</li>`).join("")}</${list.t}>`); list = null; } };
+  const flushT = () => {
+    if (!tbl.length) return;
+    const rows = tbl.filter((r) => !/^\|?[\s\-:|]+\|?$/.test(r));
+    if (rows.length) {
+      let h = '<table class="md-table">';
+      rows.forEach((r, idx) => {
+        const cells = r.replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+        const tag = idx === 0 ? "th" : "td";
+        h += `<tr>${cells.map((c) => `<${tag}>${inline(c)}</${tag}>`).join("")}</tr>`;
+      });
+      h += "</table>";
+      out.push(h);
+    }
+    tbl = [];
+  };
+
+  for (const raw of src.split("\n")) {
+    const line = raw.trim(); let m;
+    if (!line) { flushP(); flushL(); flushT(); continue; }
+    if ((m = line.match(/^\u0001(\d+)\u0001$/))) { flushP(); flushL(); flushT(); out.push(`<div class="dm">${esc(maths[+m[1]])}</div>`); continue; }
+    if ((m = line.match(/^\u0002(\d+)\u0002$/))) { flushP(); flushL(); flushT(); out.push(`<div class="plot" data-i="${m[1]}"></div>`); continue; }
+    if ((m = line.match(/^\u0003(\d+)\u0003$/))) { flushP(); flushL(); flushT(); out.push(`<pre class="code-block">${esc(codes[+m[1]])}</pre>`); continue; }
+    if (line.startsWith("|") && line.endsWith("|")) { flushP(); flushL(); tbl.push(line); continue; }
+    flushT();
+    if ((m = line.match(/^[-*•]\s+(.*)/))) { flushP(); if (!list || list.t !== "ul") { flushL(); list = { t: "ul", i: [] }; } list.i.push(m[1]); continue; }
+    if ((m = line.match(/^\d+[.)]\s+(.*)/))) { flushP(); if (!list || list.t !== "ol") { flushL(); list = { t: "ol", i: [] }; } list.i.push(m[1]); continue; }
+    flushL(); para.push(line);
+  }
+  flushP(); flushL(); flushT();
+  return { html: out.join(""), plots };
+}
+
+function parse(md) {
+  const parts = []; let cur = { title: "", body: [] }, started = false;
+  for (const line of String(md || "").split("\n")) {
+    const m = line.match(/^##\s+(.*)/);
+    if (m) { if (started || cur.body.join("").trim()) parts.push(cur); cur = { title: m[1].trim(), body: [] }; started = true; continue; }
+    if (!started && /^#\s+/.test(line)) continue;
+    cur.body.push(line);
+  }
+  parts.push(cur);
+  return parts.filter((p) => p.title || p.body.join("").trim());
+}
+
+function drawPlot(div, raw) {
+  if (typeof Plotly === "undefined") { div.textContent = "(plot library unavailable)"; return; }
+  try {
+    const s = JSON.parse(raw), traces = s.traces || [{ x: s.x, y: s.y, name: s.name }];
+    const ax = { gridcolor: "#16324a", zerolinecolor: "#2b5b80", color: "#9fc6e6" };
+    Plotly.newPlot(div, traces.map((t) => ({ mode: "lines", line: { width: 2.5 }, ...t })), {
+      title: { text: s.title || "" }, height: 300, showlegend: traces.length > 1,
+      paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(4,16,28,.6)", font: { color: "#d7e6f5" },
+      margin: { l: 56, r: 20, t: s.title ? 44 : 16, b: 48 },
+      xaxis: { ...ax, title: { text: s.xlabel || "" } }, yaxis: { ...ax, title: { text: s.ylabel || "" } },
+    }, { displayModeBar: false, responsive: true });
+  } catch (e) { div.textContent = "(plot unavailable)"; }
+}
+
+function add(i) {
+  const s = sections[i], el = document.createElement("section");
+  el.className = "card";
+  el.innerHTML = (s.title ? `<h2>${inline(s.title)}</h2>` : "") + s.html;
+  $("board").appendChild(el);
+  typeset(el);
+  el.querySelectorAll(".plot").forEach((d) => drawPlot(d, s.plots[+d.dataset.i]));
+  shown = i + 1;
+  el.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+}
+
+function bar() {
+  $("btn-prev").style.display = "none";
+  $("btn-explain").style.display = "";
+  const n = sections.length;
+  $("prog").textContent = n ? `Step ${shown} / ${n}  ·  [Enter / Space] Next` : "";
+  $("btn-next").textContent = "Next step ▸";
+  $("btn-next").disabled = !(shown < n);
+  $("btn-explain").disabled = !shown;
+}
+
+function renderQuizQuestion() {
+  const st = quizState;
+  if (!st || !st.questions.length) return;
+  if (st.idx >= st.questions.length) { finishQuiz(); return; }
+  const q = st.questions[st.idx];
+  const opts = q.options || [];
+  $("board").innerHTML = "";
+  const card = document.createElement("section");
+  card.className = "card";
+  let html = `<h2>QUESTION ${st.idx + 1} OF ${st.questions.length}</h2>`;
+  html += `<div style="font-size:18px; margin-bottom:14px;">${inline(q.question || q.q || "")}</div>`;
+  html += `<div id="quiz-opts">`;
+  opts.forEach((opt, idx) => {
+    html += `<button class="quiz-opt" data-idx="${idx}">
+      <span class="quiz-key">${idx + 1}</span>
+      <span>${inline(String(opt))}</span>
+    </button>`;
+  });
+  html += `</div><div id="quiz-exp" class="quiz-explain" style="display:none"></div>`;
+  card.innerHTML = html;
+  $("board").appendChild(card);
+  typeset(card);
+  card.querySelectorAll(".quiz-opt").forEach((btn) => { btn.onclick = () => selectQuizOption(+btn.dataset.idx); });
+  $("prog").textContent = `Question ${st.idx + 1} / ${st.questions.length}  ·  Press [1-${opts.length}] to Answer, [Enter] for Next`;
+  $("btn-prev").style.display = "none";
+  $("btn-explain").style.display = "none";
+  $("btn-next").textContent = st.idx + 1 === st.questions.length ? "Finish Quiz ▸" : "Next Question ▸";
+  $("btn-next").disabled = !st.answered;
+}
+
+function selectQuizOption(choiceIdx) {
+  const st = quizState;
+  if (!st || st.answered) return;
+  const q = st.questions[st.idx];
+  const opts = q.options || [];
+  if (choiceIdx < 0 || choiceIdx >= opts.length) return;
+  st.answered = true;
+  const ansIdx = typeof q.answer === "number" ? q.answer : 0;
+  const isRight = choiceIdx === ansIdx;
+  if (isRight) st.score++;
+  else st.mistakes.push({
+    question: q.question || q.q || "", options: opts,
+    given: opts[choiceIdx], answer: opts[ansIdx], answer_idx: ansIdx,
+    explain: q.explain || q.note || ""
+  });
+  const btns = document.querySelectorAll(".quiz-opt");
+  btns.forEach((b, i) => {
+    b.classList.add("locked");
+    if (i === ansIdx) b.classList.add("correct");
+    else if (i === choiceIdx && !isRight) b.classList.add("wrong");
+  });
+  const exp = $("quiz-exp");
+  const verdict = isRight ? "✓ Correct!" : `✕ Incorrect — Correct answer: (${ansIdx + 1}) ${opts[ansIdx] || ""}`;
+  exp.innerHTML = `<b>${esc(verdict)}</b>` + (q.explain ? `<div style="margin-top:4px">${inline(q.explain)}</div>` : "");
+  exp.style.display = "block";
+  typeset(exp);
+  $("btn-next").disabled = false;
+}
+
+function retryCurrentQuiz() {
+  if (!quizState || !quizState.questions.length) return;
+  quizState.idx = 0;
+  quizState.score = 0;
+  quizState.answered = false;
+  quizState.mistakes = [];
+  renderQuizQuestion();
+}
+
+function retryMistakesOnly() {
+  if (!quizState || !quizState.mistakes.length) return;
+  const mistakeQs = quizState.mistakes.map((m) => ({
+    question: m.question,
+    options: m.options,
+    answer: typeof m.answer_idx === "number" ? m.answer_idx : 0,
+    explain: m.explain || ""
+  }));
+  quizState = {
+    title: quizState.title + " (Mistake Review)",
+    questions: mistakeQs,
+    idx: 0,
+    score: 0,
+    answered: false,
+    mistakes: []
+  };
+  renderQuizQuestion();
+}
+
+function finishQuiz() {
+  const st = quizState;
+  if (!st) return;
+  const pct = Math.round((st.score / Math.max(1, st.questions.length)) * 100);
+  const hasMistakes = st.mistakes.length > 0;
+  $("board").innerHTML = `<section class="card" style="text-align:center; padding:28px;">
+    <h2>QUIZ COMPLETE</h2>
+    <div style="font-size:32px; font-weight:700; color:#00ff88; margin:10px 0;">${st.score} / ${st.questions.length} (${pct}%)</div>
+    <p style="color:#9fc6e6; margin-bottom:20px;">${hasMistakes ? `${st.mistakes.length} question(s) saved to your Mistake Bank for revision.` : "Perfect score! Every answer was correct."}</p>
+    <div style="display:flex; justify-content:center; gap:12px; flex-wrap:wrap;">
+      <button id="btn-quiz-retry" style="border-color:#00d4ff; color:#ffffff; padding:8px 18px;">↻ Retry Quiz [R]</button>
+      ${hasMistakes ? `<button id="btn-quiz-mistakes" style="border-color:#ffcc00; color:#ffcc00; padding:8px 18px;">⚠ Practice ${st.mistakes.length} Mistake(s) [M]</button>` : ""}
+      <button id="btn-quiz-clear" style="padding:8px 18px;">✓ Clear Board [Enter]</button>
+    </div>
+  </section>`;
+  $("btn-quiz-retry").onclick = retryCurrentQuiz;
+  if (hasMistakes && $("btn-quiz-mistakes")) {
+    $("btn-quiz-mistakes").onclick = retryMistakesOnly;
+  }
+  $("btn-quiz-clear").onclick = () => ops.clear();
+  $("prog").textContent = `Quiz completed: ${st.score}/${st.questions.length}  ·  [R] Retry  ·  ${hasMistakes ? "[M] Mistakes  ·  " : ""}[Enter / Ctrl+R] Clear Board`;
+  $("btn-next").disabled = true;
+  send("quiz_complete", { topic: st.title, score: st.score, total: st.questions.length, mistakes: st.mistakes });
+}
+
+function renderFlashcard() {
+  const st = flashState;
+  if (!st || !st.cards.length) return;
+  const c = st.cards[st.idx];
+  $("board").innerHTML = "";
+  const wrap = document.createElement("div");
+  wrap.className = "flash-wrap card";
+  const rawContent = st.flipped ? c.back : c.front;
+  wrap.innerHTML = `<div class="flash-box">
+    <div class="flash-tag">${st.flipped ? "ANSWER / FORMULA" : `CONCEPT CARD ${st.idx + 1} OF${st.cards.length}`}</div>
+    <div class="flash-text">${inline(rawContent)}</div>
+    <div class="flash-hint">[Spacebar / Click] Flip Card  ·  [← / →] Previous / Next</div>
+  </div>`;
+  wrap.onclick = () => { st.flipped = !st.flipped; renderFlashcard(); };
+  $("board").appendChild(wrap);
+  typeset(wrap);
+  $("prog").textContent = `Flashcard ${st.idx + 1} / ${st.cards.length}  ·  [Space] Flip`;
+  $("btn-explain").style.display = "none";
+  $("btn-prev").style.display = "";
+  $("btn-prev").disabled = st.idx <= 0;
+  $("btn-next").textContent = "Next Card ▸";
+  $("btn-next").disabled = st.idx >= st.cards.length - 1;
+}
+
+function buildMindmapHTML(root) {
+  if (!root) return "";
+  const rootLabel = inline(root.label || root.title || root.name || "Main Topic");
+  const branches = Array.isArray(root.children) ? root.children : [];
+  let html = `<div class="mm-canvas"><div class="mm-root-box">${rootLabel}</div>`;
+  if (branches.length) {
+    html += `<div class="mm-trunk"></div><div class="mm-branches">`;
+    branches.forEach((branch, idx) => {
+      const bTitle = inline(branch.label || branch.title || branch.name || `Branch ${idx + 1}`);
+      const leaves = Array.isArray(branch.children) ? branch.children : [];
+      html += `<div class="mm-col"><div class="mm-branch-head"><span class="mm-branch-num">${idx + 1}</span>${bTitle}</div>`;
+      if (leaves.length) {
+        html += `<div class="mm-leaf-list">`;
+        leaves.forEach((leaf) => {
+          const lText = typeof leaf === "string" ? inline(leaf) : inline(leaf.label || leaf.title || leaf.name || "");
+          const subLeaves = (leaf && Array.isArray(leaf.children)) ? leaf.children : [];
+          html += `<div class="mm-leaf">${lText}`;
+          if (subLeaves.length) {
+            html += `<div class="mm-subleaf-list">`;
+            subLeaves.forEach((sub) => {
+              const sText = typeof sub === "string" ? inline(sub) : inline(sub.label || sub.title || "");
+              html += `<div class="mm-subleaf">• ${sText}</div>`;
+            });
+            html += `</div>`;
+          }
+          html += `</div>`;
+        });
+        html += `</div>`;
+      }
+      html += `</div>`;
+    });
+    html += `</div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+const ops = {
+  render(p) {
+    activeMode = "board"; setModeBadge("SOLUTION");
+    $("title").textContent = (p.title || "STUDY STATION").toUpperCase();
+    $("chip").textContent = p.subject || "";
+    $("chip").style.display = p.subject ? "" : "none";
+    sections = parse(p.markdown || "").map((s) => ({ title: s.title, ...blocks(s.body.join("\n")) }));
+    $("board").innerHTML = ""; shown = 0;
+    const first = p.reveal === "all" ? sections.length : Math.min(1, sections.length);
+    for (let i = 0; i < first; i++) add(i);
+    bar();
+  },
+  next() {
+    if (activeMode === "quiz" && quizState) {
+      if (quizState.answered) { quizState.idx++; quizState.answered = false; renderQuizQuestion(); }
+      return;
+    }
+    if (activeMode === "flashcards" && flashState) {
+      if (flashState.idx < flashState.cards.length - 1) { flashState.idx++; flashState.flipped = false; renderFlashcard(); }
+      return;
+    }
+    if (shown < sections.length) add(shown);
+    bar();
+  },
+  quiz(p) {
+    activeMode = "quiz"; setModeBadge("QUIZ");
+    $("title").textContent = (p.title || "PRACTICE QUIZ").toUpperCase();
+    $("chip").textContent = p.subject || "";
+    $("chip").style.display = p.subject ? "" : "none";
+    quizState = { title: p.title || "Quiz", questions: p.questions || [], idx: 0, score: 0, answered: false, mistakes: [] };
+    renderQuizQuestion();
+  },
+  flashcards(p) {
+    activeMode = "flashcards"; setModeBadge("FLASHCARDS");
+    $("title").textContent = (p.title || "FLASHCARDS").toUpperCase();
+    $("chip").textContent = p.subject || "";
+    $("chip").style.display = p.subject ? "" : "none";
+    flashState = { title: p.title || "Flashcards", cards: p.cards || [], idx: 0, flipped: false };
+    renderFlashcard();
+  },
+  mindmap(p) {
+    activeMode = "mindmap"; setModeBadge("MINDMAP");
+    $("title").textContent = (p.title || "CONCEPT MINDMAP").toUpperCase();
+    $("chip").textContent = p.subject || "";
+    $("chip").style.display = p.subject ? "" : "none";
+    $("board").innerHTML = `<section class="card" style="max-width:100%;">${buildMindmapHTML(p.tree || {})}</section>`;
+    typeset($("board"));
+    $("prog").textContent = "Visual Concept Tree";
+    $("btn-prev").style.display = "none";
+    $("btn-explain").style.display = "none";
+    $("btn-next").disabled = true;
+  },
+  status(p) {
+    sections = []; shown = 0; $("board").innerHTML = "";
+    const d = document.createElement("div"); d.className = "status"; d.textContent = p.text || "";
+    $("board").appendChild(d); bar();
+  },
+  clear() {
+    activeMode = "board"; setModeBadge("BOARD");
+    ops.status({ text: "Ask a question to start." });
+    $("title").textContent = "STUDY STATION"; $("chip").style.display = "none";
+  },
+};
+
+const send = (type, data) => { if (bridge) bridge.userEvent(JSON.stringify({ type, ...(data || {}) })); };
+$("btn-next").onclick = () => ops.next();
+$("btn-prev").onclick = () => {
+  if (activeMode === "flashcards" && flashState && flashState.idx > 0) {
+    flashState.idx--; flashState.flipped = false; renderFlashcard();
+  }
+};
+$("btn-explain").onclick = () => send("explain_step", { n: shown, title: (sections[shown - 1] || {}).title || "" });
+$("btn-reset").onclick = () => ops.clear();
+$("btn-exit").onclick = () => send("exit");
+
+window.addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.metaKey) {
+    if (e.key === "=" || e.key === "+") { e.preventDefault(); applyZoom(currentZoom + 10); return; }
+    if (e.key === "-" || e.key === "_") { e.preventDefault(); applyZoom(currentZoom - 10); return; }
+    if (e.key === "0") { e.preventDefault(); applyZoom(110); return; }
+    if (e.key === "r" || e.key === "R") { e.preventDefault(); ops.clear(); return; }
+  }
+  if (activeMode === "quiz" && quizState) {
+    const isFinished = quizState.idx >= quizState.questions.length;
+    if (isFinished) {
+      if (e.key === "r" || e.key === "R") { e.preventDefault(); retryCurrentQuiz(); }
+      else if ((e.key === "m" || e.key === "M") && quizState.mistakes.length) { e.preventDefault(); retryMistakesOnly(); }
+      else if (e.key === "Enter") { e.preventDefault(); ops.clear(); }
+      return;
+    }
+    if (e.key >= "1" && e.key <= "9") {
+      e.preventDefault();
+      selectQuizOption(parseInt(e.key, 10) - 1);
+    } else if (e.key === "Enter" && quizState.answered) {
+      e.preventDefault();
+      ops.next();
+    }
+  } else if (activeMode === "flashcards" && flashState) {
+    if (e.key === " " || e.code === "Space") {
+      e.preventDefault();
+      flashState.flipped = !flashState.flipped; renderFlashcard();
+    } else if (e.key === "ArrowRight" || e.key === "Enter") {
+      e.preventDefault();
+      ops.next();
+    } else if (e.key === "ArrowLeft" && flashState.idx > 0) {
+      e.preventDefault();
+      flashState.idx--; flashState.flipped = false; renderFlashcard();
+    }
+  } else if (activeMode === "board") {
+    if ((e.key === "Enter" || e.code === "Space") && shown < sections.length) {
+      e.preventDefault();
+      ops.next();
+    }
+  }
+});
+
+if (typeof renderMathInElement === "undefined") {
+  ops.status({ text: "Board libraries missing.\nRun: python tools/fetch_study_vendor.py" });
+} else if (window.qt && typeof QWebChannel !== "undefined") {
+  new QWebChannel(qt.webChannelTransport, (ch) => {
+    bridge = ch.objects.bridge;
+    bridge.toBoard.connect((raw) => { try { const m = JSON.parse(raw); if (ops[m.op]) ops[m.op](m); } catch (e) { console.error(e); } });
+    bridge.boardReady();
+  });
+} else {
+  ops.status({ text: "Study board is waiting for JARVIS." });
+}
+</script>
+</body>
+</html>
