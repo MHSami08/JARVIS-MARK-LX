@@ -63,8 +63,8 @@
 | 🧑‍💻 **Git দিয়ে** | নিচের কমান্ড টার্মিনালে পেস্ট করুন |
 
 ```bash
-git clone https://github.com/FatihMakes/Mark-LV.git
-cd Mark-LV
+git clone https://github.com/FatihMakes/Mark-LX.git
+cd Mark-LX
 ```
 
 **২.** ZIP নিলে ফাইলটি **আনজিপ (Extract)** করুন।
