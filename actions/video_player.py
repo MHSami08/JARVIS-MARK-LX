@@ -1,10 +1,10 @@
 """
-Play a video where the avatar normally is.
+Play a video where the core normally is.
 
 The HUD already had a surface for this — the live camera takes the centre of
 the screen and gives it back — so a video is the same idea with a different
 source, and it shares the same stack rather than inventing a second one. That
-means the avatar, the camera and a video can never be on screen together.
+means the core, the camera and a video can never be on screen together.
 
 WHAT IT ACCEPTS
     a local file        C:\\Users\\me\\clip.mp4, ~/Videos/holiday.mkv
@@ -277,7 +277,7 @@ TOOL = {
     "description": (
         "If user wants to open a video on YouTube, he will tell you that specifically"
         "If user wants to play a video, then he wants to call this feature"
-        "Plays a VIDEO on the assistant's own display, where the avatar "
+        "Plays a VIDEO on the assistant's own display, where the core "
         "normally is — and stops it, mutes it or unmutes it. Use whenever the "
         "user wants to WATCH something on screen: 'play the new Dune trailer', "
         "'şu videoyu oynat', 'play C:/clips/holiday.mp4', 'put that YouTube "
