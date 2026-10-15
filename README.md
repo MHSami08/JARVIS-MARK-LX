@@ -63,7 +63,7 @@
 | 🧑‍💻 **Git দিয়ে** | নিচের কমান্ড টার্মিনালে পেস্ট করুন |
 
 ```bash
-git clone https://github.com/FatihMakes/Mark-LX.git
+git clone https://github.com/MHSami08/JARVIS-MARK-LX.git
 cd Mark-LX
 ```
 
