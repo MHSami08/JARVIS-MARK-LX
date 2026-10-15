@@ -13,31 +13,25 @@ CONFIG_FILE = CONFIG_DIR / "api_keys.json"
 
 DEFAULT_ROUTING_RULES = {
     "fast": [
-        "gemini:gemini-2.5-flash-lite",
-        "gemini:gemini-2.5-flash",
-        {
-            "provider": "openrouter",
-            "model": "openrouter/free"
-        }
+        "gemini:gemini-3.1-flash-lite",
+        "gemini:gemini-3.5-flash",
     ],
     "coding": [
-        {
-            "provider": "openrouter",
-            "model": "cohere/command-r-plus:free"
-        },
-        {
-            "provider": "openrouter",
-            "model": "deepseek/deepseek-r1:free"
-        },
-        "gemini:gemini-2.5-flash"
+        "gemini:gemini-3.5-flash",
+        "gemini:gemini-3.1-flash-lite",
     ],
     "writing": [
-        {
-            "provider": "openrouter",
-            "model": "nvidia/llama-3.1-nemotron-70b-instruct:free"
-        },
-        "gemini:gemini-2.5-flash"
-    ]
+        "gemini:gemini-3.5-flash",
+        "gemini:gemini-3.1-flash-lite",
+    ],
+    "study": [
+        "gemini:gemini-3.5-flash",
+        "gemini:gemini-3.1-flash-lite",
+    ],
+    "study_fast": [
+        "gemini:gemini-3.1-flash-lite",
+        "gemini:gemini-3.5-flash",
+    ],
 }
 
 def ensure_config_dir() -> None:
@@ -196,24 +190,16 @@ def save_barge_in_sensitivity(value: str) -> None:
                v if v in BARGE_SENSITIVITIES else DEFAULT_BARGE_SENSITIVITY)
 
 
-HUD_STYLES = ("face", "core")
+HUD_STYLES = ("core",)
 
 
 def get_hud_style() -> str:
-    """Which centrepiece the HUD draws: the animated head, or the reactor core.
-
-    Taste, not capability — both render in the same software painter and cost
-    about the same. Defaults to the head because that is what MARK LIV shipped
-    with; anyone who preferred the older look can switch back in ⚙ and the
-    choice survives a restart.
-    """
-    v = str(load_api_keys().get("hud_style", "core")).strip().lower()
-    return v if v in HUD_STYLES else "core"
+    """The central HUD style: Arc Reactor Core is the exclusive permanent HUD."""
+    return "core"
 
 
-def save_hud_style(style: str) -> None:
-    s = str(style or "").strip().lower()
-    _save_flag("hud_style", s if s in HUD_STYLES else "core")
+def save_hud_style(style: str = "core") -> None:
+    _save_flag("hud_style", "core")
 
 
 # ── Live-session tuning ──────────────────────────────────────────────────────
