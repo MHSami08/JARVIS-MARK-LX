@@ -18,7 +18,7 @@ tool handlers to the Gemini API wrapper and the model router.
 | Folder | Role | Entry points |
 |---|---|---|
 | `main.py` | The agent. Owns the Live session, the mic/speaker loops, tool dispatch. | `main()`, `class JarvisLive` |
-| `ui.py` | PyQt6 HUD window, avatar, settings panels, content panel, camera stream, **Study Station layout switch**. | `class MainWindow` (Qt side), `class JarvisUI` (thread-safe facade) |
+| `ui.py` | PyQt6 HUD window, Arc Reactor Core, settings panels, content panel, camera stream, **Study Station layout switch**. | `class MainWindow` (Qt side), `class JarvisUI` (thread-safe facade) |
 | `core/` | Infrastructure: API wrapper, model router, loaders, audio pipeline, vision, safety. | `gemini`, `model_router`, `action_loader`, `plugin_loader`, … |
 | `actions/` | Auto-discovered tools, one file = one `TOOL` dict. | `discover_actions()` |
 | `plugins/` | Auto-discovered user plugins, one file = one `PLUGIN` dict + `run()`. | `discover_plugins()` |
@@ -51,7 +51,6 @@ tool handlers to the Gemini API wrapper and the model router.
 | `viseme.py` | `VisemeStream` | `main.py` |
 | `wake_word.py` | `WakeWordDetector`, `is_ready`, `install_and_download` | `main.py`, `ui.py` |
 | `hotkey.py` | `PushToTalk`, `chord_label` | `main.py`, `ui.py` |
-| `avatar.py` / `avatar_mesh.py` | `HoloAvatar`, `get_head_mesh` | `ui.py`; `avatar.py` |
 | `target_overlay.py` | `TargetOverlay` | `ui.py`, `tools/calibrate.py` |
 | `ui_readability.py` | font/contrast helpers | `ui.py` |
 | `stt.py`, `tts.py`, `llm_client.py`, `installer.py` | **Orphaned** — no importers in the tree | — |
@@ -165,7 +164,7 @@ onto the `ui` object.
 - `JarvisUI` (line 7093) — thread-safe facade over `MainWindow` (`self._win`).
   This is the `player` object tools and plugins receive.
 
-**Imports:** `core.ui_readability`, `core.avatar.HoloAvatar`, `core.audio_devices`,
+**Imports:** `core.ui_readability`, `core.audio_devices`,
 `core.wake_word.is_ready`, `core.hotkey.chord_label`, `core.target_overlay.TargetOverlay`,
 `memory.config_manager` (voice, plugin flags, devices, brief, HUD style),
 `memory.memory_manager` (`all_entries_for_ui`, `forget`), `core.confirm`,
@@ -674,7 +673,7 @@ VOICE "next" / "exit"
 | Consumer | Depends on |
 |---|---|
 | `main.py` | `ui`, `memory.*`, `core.gemini`, `core.action_loader`, `core.plugin_loader`, `core.{undo,confirm,audio_devices,echo,barge_in,noise_gate,viseme,wake_word,hotkey,screen_geometry,study_guard}`, `actions.{screen_processor,system_monitor,proactive,background_monitor,web_search}`, `dashboard.server`, `prompt.txt` |
-| `ui.py` | `core.{ui_readability,avatar,audio_devices,wake_word,hotkey,target_overlay,confirm,gemini,study_guard,study_canvas}`, `memory.*` |
+| `ui.py` | `core.{ui_readability,audio_devices,wake_word,hotkey,target_overlay,confirm,gemini,study_guard,study_canvas}`, `memory.*` |
 | `core/study_canvas.py` | `PyQt6` (+ `QtWebEngine`, `QtWebChannel`, optional), `runtime/study_board.html` |
 | `runtime/study_board.html` | `runtime/vendor/{katex,tailwind,plotly}`, `qrc:///qtwebchannel/qwebchannel.js` |
 | `core/study_guard.py` | stdlib only (leaf) |

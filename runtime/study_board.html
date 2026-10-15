@@ -253,6 +253,31 @@
     .verdict-header.correct { color: #34d399; }
     .verdict-header.incorrect { color: #f87171; }
 
+
+  li.math-step-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 6px 10px; margin: 5px 0;
+    border-radius: 7px; background: rgba(255, 255, 255, 0.015);
+    border-left: 2px solid rgba(0, 212, 255, 0.35);
+    list-style: none;
+  }
+  li.math-step-row:hover {
+    background: rgba(0, 212, 255, 0.06);
+    border-left-color: #00d4ff;
+  }
+  .math-step-content { flex: 1; overflow-x: auto; }
+  .line-qmark {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; border-radius: 50%;
+    background: rgba(0, 212, 255, 0.10); color: #6f93ad;
+    border: 1px solid rgba(0, 212, 255, 0.30);
+    font-size: 12px; font-weight: 800; cursor: pointer;
+    flex-shrink: 0; user-select: none; transition: all 0.15s;
+  }
+  .line-qmark:hover {
+    background: #00d4ff; color: #02101c; border-color: #ffffff;
+    transform: scale(1.1); box-shadow: 0 0 8px rgba(0, 212, 255, 0.5);
+  }
 </style>
 </head>
 <body>
@@ -306,12 +331,16 @@ $("btn-zoom-out").onclick = () => applyZoom(currentZoom - 10);
 $("zoom-lbl").onclick = () => applyZoom(110);
 
 function repairCorruptedLatex(str) {
-  return String(str || "")
+  let s = String(str || "")
     .replace(/\x0c(rac|orall|lat)/g, "\\f$1")
     .replace(/\x08(eta|ar|inom|egin|f)/g, "\\b$1")
     .replace(/\t(an|heta|au|ext|imes|o)/g, "\\t$1")
     .replace(/\r(ho|ight)/g, "\\r$1")
     .replace(/\n(eq|u|abla)/g, "\\n$1");
+  // Fix missing backslash or shorthand frac57 -> \frac{5}{7}
+  s = s.replace(/(?<!\\)\bfrac\s*\{/g, "\\frac{");
+  s = s.replace(/(?:\\)?\bfrac\s*([0-9০-৯a-zA-Z])\s*([0-9০-৯a-zA-Z])(?![0-9০-৯a-zA-Z\}])/g, "\\frac{$1}{$2}");
+  return s;
 }
 
 function convertPlainMathToTex(expr) {
@@ -349,7 +378,11 @@ function autoLatexFormula(raw) {
   return s;
 }
 
-const inline = (s) => esc(autoLatexFormula(s))
+const inline = (s) => esc(autoLatexFormula(
+    String(s || "")
+      .replace(/\*\*\[(?:লাইন|Line)\s*[০-৯0-9]+\]\*\*\s*/g, "")
+      .replace(/\[(?:লাইন|Line)\s*[০-৯0-9]+\]\s*/g, "")
+  ))
   .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
   .replace(/`([^`]+)`/g, "<code>$1</code>");
 
@@ -384,7 +417,20 @@ function blocks(src) {
 
   const out = []; let para = [], list = null, tbl = [];
   const flushP = () => { if (para.length) { out.push(`<p>${inline(para.join(" "))}</p>`); para = []; } };
-  const flushL = () => { if (list) { out.push(`<${list.t}>${list.i.map((x) => `<li>${inline(x)}</li>`).join("")}</${list.t}>`); list = null; } };
+  const flushL = () => {
+    if (!list) return;
+    const itemsHtml = list.i.map((x) => {
+      const m = String(x).match(/\[\[L:([০-৯0-9]+)\]\]\s*$/);
+      if (m) {
+        const lineNum = m[1];
+        const cleanX = String(x).replace(/\s*\[\[L:[০-৯0-9]+\]\]\s*$/, "");
+        return `<li class="math-step-row"><div class="math-step-content">${inline(cleanX)}</div><span class="line-qmark" data-line="লাইন ${lineNum}" onclick="askLineExplain(this)" title="লাইন ${lineNum}-এর ব্যাখ্যা দেখুন">?</span></li>`;
+      }
+      return `<li>${inline(x)}</li>`;
+    }).join("");
+    out.push(`<${list.t}>${itemsHtml}</${list.t}>`);
+    list = null;
+  };
   const flushT = () => {
     if (!tbl.length) return;
     const rows = tbl.filter((r) => !/^\|?[\s\-:|]+\|?$/.test(r));
@@ -418,15 +464,29 @@ function blocks(src) {
 }
 
 function parse(md) {
-  const parts = []; let cur = { title: "", body: [] }, started = false;
+  const parts = [];
+  let cur = { title: "ধাপ ১: সূচনা ও মূল ধারণা", body: [] }, started = false;
   for (const line of String(md || "").split("\n")) {
     const m = line.match(/^##\s+(.*)/);
-    if (m) { if (started || cur.body.join("").trim()) parts.push(cur); cur = { title: m[1].trim(), body: [] }; started = true; continue; }
+    if (m) {
+      if (started || cur.body.join("").trim()) parts.push(cur);
+      cur = { title: m[1].trim(), body: [] };
+      started = true;
+      continue;
+    }
     if (!started && /^#\s+/.test(line)) continue;
     cur.body.push(line);
   }
-  parts.push(cur);
+  if (cur.title || cur.body.join("").trim()) parts.push(cur);
   return parts.filter((p) => p.title || p.body.join("").trim());
+}
+
+function askLineExplain(badgeEl) {
+  const label = (badgeEl && badgeEl.dataset && badgeEl.dataset.line) ? badgeEl.dataset.line : "এই লাইন";
+  const row = badgeEl && badgeEl.closest ? badgeEl.closest("li") : null;
+  const contentEl = row ? row.querySelector(".math-step-content") : null;
+  const lineContent = contentEl ? contentEl.textContent.trim() : "";
+  send("explain_line", { label: label, content: lineContent });
 }
 
 function drawPlot(div, raw) {
@@ -444,6 +504,7 @@ function drawPlot(div, raw) {
 }
 
 function add(i) {
+  if (i < 0 || i >= sections.length) return;
   const s = sections[i], el = document.createElement("section");
   el.className = "card";
   el.innerHTML = (s.title ? `<h2>${inline(s.title)}</h2>` : "") + s.html;
@@ -451,18 +512,32 @@ function add(i) {
   typeset(el);
   el.querySelectorAll(".plot").forEach((d) => drawPlot(d, s.plots[+d.dataset.i]));
   shown = i + 1;
-  el.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+  if (i === 0) {
+    $("board").scrollTop = 0;
+  } else {
+    el.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  }
 }
 
 function bar() {
-  $("btn-prev").style.display = "";
+  const n = sections.length;
+  if (!n || activeMode !== "board") {
+    $("prog").textContent = "";
+    $("btn-prev").style.display = "none";
+    $("btn-prev").disabled = true;
+    $("btn-explain").style.display = "";
+    $("btn-explain").disabled = true;
+    $("btn-next").textContent = "Next step ▸";
+    $("btn-next").disabled = true;
+    return;
+  }
+  $("btn-prev").style.display = shown > 1 ? "" : "none";
   $("btn-prev").disabled = !(shown > 1);
   $("btn-explain").style.display = "";
-  const n = sections.length;
-  $("prog").textContent = n ? `Step ${shown} / ${n}  ·  [Enter / Space] Next  ·  [◂ Prev] Previous` : "";
+  $("btn-explain").disabled = !shown;
+  $("prog").textContent = `Step ${shown} / ${n}  ·  [Enter / Space] Next`;
   $("btn-next").textContent = "Next step ▸";
   $("btn-next").disabled = !(shown < n);
-  $("btn-explain").disabled = !shown;
 }
 
 function renderQuizQuestion() {
@@ -781,10 +856,19 @@ const ops = {
     $("board").appendChild(d); bar();
   },
   clear() {
-    activeMode = "board"; setModeBadge("BOARD");
-    ops.status({ text: "Ask a question to start." });
-    $("title").textContent = "STUDY STATION"; $("chip").style.display = "none";
-    send("quiz_complete", { clear: true });
+    activeMode = "board";
+    setModeBadge("BOARD");
+    sections = [];
+    shown = 0;
+    quizState = null;
+    flashState = null;
+    window._currentQuizActive = false;
+    $("board").innerHTML = '<div class="status">Ask a question to start.</div>';
+    $("title").textContent = "STUDY STATION";
+    $("chip").textContent = "";
+    $("chip").style.display = "none";
+    bar();
+    send("board_cleared", { clear: true });
   },
 };
 

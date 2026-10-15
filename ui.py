@@ -4624,6 +4624,13 @@ class MainWindow(QMainWindow):
         elif op == "clear":
             c.clear()
     def _on_study_event(self, kind: str, data: dict) -> None:
+        if kind == "board_cleared":
+            try:
+                from actions import study_quiz
+                study_quiz.set_quiz_active(False)
+            except Exception:
+                pass
+            return
         if kind == "exit":
             try:
                 from actions import study_quiz
@@ -4632,8 +4639,15 @@ class MainWindow(QMainWindow):
                 pass
             self._set_study_mode(False)
         elif kind == "explain_step" and self.on_text_command:
-            msg = (f"Explain step {data.get('n', '')} ({data.get('title', '')}) of the "
-                   f"solution on the study board, in simple words.")
+            msg = (f"বোর্ডের সমাধানের ধাপ {data.get('n', '')} ({data.get('title', '')}) সহজ বাংলায় বিস্তারিত বুঝিয়ে দাও।")
+            threading.Thread(target=self.on_text_command, args=(msg,), daemon=True).start()
+        elif kind == "explain_line" and self.on_text_command:
+            lbl = data.get("label", "")
+            cnt = data.get("content", "")
+            self._log_sig.emit(f"You: [{lbl} বুঝিয়ে দাও]")
+            msg = (
+                f"বোর্ডে দেওয়া অংকের `{lbl}` ({cnt}) কীভাবে এসেছে, আগের লাইন থেকে এই লাইনে কোন সূত্র বা বীজগণিতিক ক্যালকুলেশন করা হয়েছে তা সহজ বাংলায় ধাপে ধাপে বুঝিয়ে দাও।"
+            )
             threading.Thread(target=self.on_text_command, args=(msg,), daemon=True).start()
         elif kind == "quiz_complete":
             try:
@@ -4659,9 +4673,10 @@ class MainWindow(QMainWindow):
                     for m in mistakes[:5]
                 )
                 msg = (
-                    f"[STUDY_QUIZ_DONE] Topic='{topic}', Score={score}/{total}. "
-                    + (f"Mistakes: {wrong_txt}. " if wrong_txt else "Perfect score! ")
-                    + "Give the student brief, encouraging feedback in 1-2 sentences in their language."
+                    f"[STUDY_QUIZ_DONE — QUIZ IS NOW FINISHED AND CLOSED] Topic='{topic}', Score={score}/{total}. "
+                    + (f"Mistakes made by student: {wrong_txt}. " if wrong_txt else "Perfect score! ")
+                    + "Give the student brief, encouraging feedback in 1-2 sentences in Bangla and ask if they want any of the mistaken questions explained deeply. "
+                    + "CRITICAL RULE: The quiz is OVER, so the anti-cheat lock is OFF. If the student asks you to explain, solve, or deeply clarify any question from this quiz (or anything else), you MUST call the `study_solve_problem` tool (with the full question/concept text and reveal='all') so the visual step-by-step explanation actually appears on the Study Board! Never claim you showed something on the board without calling `study_solve_problem`."
                 )
                 threading.Thread(target=self.on_text_command, args=(msg,), daemon=True).start()
 
