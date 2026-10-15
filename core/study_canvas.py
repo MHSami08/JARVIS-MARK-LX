@@ -65,7 +65,11 @@ class StudyCanvasWidget(QWidget):
             lay.addWidget(hint)
             return
 
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        self.setStyleSheet("background:#02060d;")
         self._view = QWebEngineView(self)
+        self._view.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        self._view.setStyleSheet("background:#02060d;")
         page = self._view.page()
         page.setBackgroundColor(QColor("#02060d"))
         s = page.settings()
@@ -143,6 +147,12 @@ class StudyCanvasWidget(QWidget):
 
     def next_step(self) -> None:
         self._post("next")
+
+    def prev_step(self) -> None:
+        self._post("prev")
+
+    def restore(self, target: str = "") -> None:
+        self._post("restore", target=target)
 
     def clear(self) -> None:
         self._post("clear")

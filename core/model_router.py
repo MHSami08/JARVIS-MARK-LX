@@ -25,33 +25,35 @@ _KEY_FILE = _BASE / "config" / "api_keys.json"
 
 DEFAULT_RULES: dict[str, list[tuple[str, str]]] = {
     "coding": [
-        ("groq", "llama-3.3-70b-versatile"),
+        ("groq", "llama-3.1-8b-instant"),
         ("openrouter", "deepseek/deepseek-r1:free"),
-        ("gemini", "gemini-3.5-flash"),
+        ("gemini", "gemini-2.5-flash"),
         ("gemini", "gemini-3.1-flash-lite"),
     ],
     "writing": [
-        ("groq", "llama-3.3-70b-versatile"),
+        ("groq", "llama-3.1-8b-instant"),
         ("openrouter", "meta-llama/llama-3.3-70b-instruct:free"),
-        ("gemini", "gemini-3.5-flash"),
+        ("gemini", "gemini-2.5-flash"),
         ("gemini", "gemini-3.1-flash-lite"),
     ],
     "fast": [
         ("groq", "llama-3.1-8b-instant"),
-        ("gemini", "gemini-3.5-flash-lite"),
+        ("gemini", "gemini-2.5-flash-lite"),
         ("gemini", "gemini-3.1-flash-lite"),
         ("openrouter", "meta-llama/llama-3.3-70b-instruct:free"),
     ],
     "study": [
-        ("groq", "llama-3.3-70b-versatile"),
+        ("gemini", "gemini-2.5-flash"),
+        ("groq", "llama-3.1-8b-instant"),
+        ("gemini", "gemini-2.5-flash-lite"),
+        ("gemini", "gemini-2.5-flash"),
         ("openrouter", "deepseek/deepseek-r1:free"),
-        ("gemini", "gemini-3.5-flash"),
-        ("gemini", "gemini-3.1-flash-lite"),
     ],
     "study_fast": [
-        ("groq", "llama-3.3-70b-versatile"),
-        ("gemini", "gemini-3.5-flash-lite"),
-        ("gemini", "gemini-3.1-flash-lite"),
+        ("gemini", "gemini-2.5-flash-lite"),
+        ("groq", "llama-3.1-8b-instant"),
+        ("gemini", "gemini-2.5-flash"),
+        ("gemini", "gemini-2.5-flash-lite"),
         ("openrouter", "meta-llama/llama-3.3-70b-instruct:free"),
     ],
 }
@@ -245,7 +247,15 @@ def _gemini(key: str, model: str, prompt: str, system: str, json_mode: bool,
     cfg = types.GenerateContentConfig(
         system_instruction=system or None,
         response_mime_type="application/json" if json_mode else None)
-    return client.models.generate_content(model=model, contents=prompt, config=cfg).text or ""
+    res = client.models.generate_content(model=model, contents=prompt, config=cfg)
+    try:
+        return res.text or ""
+    except Exception:
+        if getattr(res, "candidates", None) and res.candidates:
+            parts = getattr(res.candidates[0].content, "parts", [])
+            texts = [getattr(p, "text", "") for p in parts if getattr(p, "text", None)]
+            return "".join(texts).strip()
+        return ""
 
 
 def _openai_compat(provider: str, key: str, model: str, prompt: str,
@@ -310,11 +320,39 @@ def _gemini_ladder_fallback(prompt: str, system: str, json_mode: bool, timeout: 
     return ""
 
 
+QUIZ_INTEGRITY_WARNING = "এটি একটি পরীক্ষা চলছে। পরীক্ষার সময় আমি সরাসরি উত্তর বা সমাধান বলে দিতে পারব না।"
+
+QUIZ_INTEGRITY_SYSTEM_INSTRUCTION = (
+    "\n[STRICT QUIZ INTEGRITY & ANTI-CHEATING GUARD]\n"
+    "If an active quiz session or examination is in progress and the user asks for direct answers, "
+    "solutions, choices, or hints to solve active quiz questions, you MUST strictly refuse with "
+    "this exact academic warning:\n"
+    f'"{QUIZ_INTEGRITY_WARNING}"\n'
+    "Never leak or confirm the correct option while the quiz is active."
+)
+
+
 def _run(prompt: str, task: str, system: str, model: str | None,
          json_mode: bool = False, accept=None,
          timeout: float | None = None, budget: float | None = None) -> str:
     try:
         _refresh()
+
+        # Quiz integrity check
+        try:
+            from actions import study_quiz
+            quiz_on = hasattr(study_quiz, "is_quiz_active") and study_quiz.is_quiz_active()
+        except Exception:
+            quiz_on = False
+
+        if quiz_on:
+            p_lower = (prompt or "").lower()
+            if any(w in p_lower for w in ["উত্তর কি", "সঠিক উত্তর", "উত্তর বলে দাও", "answer of", "solve this quiz", "tell me the answer"]):
+                return QUIZ_INTEGRITY_WARNING
+
+        if (quiz_on or str(task or "").startswith("study")) and QUIZ_INTEGRITY_WARNING not in (system or ""):
+            system = (system + "\n" if system else "") + QUIZ_INTEGRITY_SYSTEM_INSTRUCTION
+
         deadline = time.monotonic() + budget if budget else None
         for provider, mdl in _chain(task if isinstance(task, str) else "fast", model, prompt=prompt):
             pool = _pools[provider]
@@ -420,7 +458,7 @@ def fallback_text(contents, config=None, raw_cfg=None, timeout_s: float = 30.0) 
 
     _refresh()
     fallback_steps = [
-        ("groq", "llama-3.3-70b-versatile"),
+        ("groq", "llama-3.1-8b-instant"),
         ("openrouter", "meta-llama/llama-3.3-70b-instruct:free"),
         ("openrouter", "deepseek/deepseek-r1:free"),
     ]
