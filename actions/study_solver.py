@@ -138,13 +138,91 @@ SUBJECT_PROMPTS: Dict[str, str] = {
 _LATEX_ESC_RX = re.compile(r"\\([a-zA-Z]+|\{|\})")
 
 
+
+_BN_DIGITS = str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯")
+
+def _to_bn_num(n: int) -> str:
+    return str(n).translate(_BN_DIGITS)
+
+def _ensure_numbered_lines(md: str) -> tuple[str, str]:
+    """Tags ONLY sequential mathematical derivation lines with a subtle marker
+    for the right-corner '?' button, and builds a clean 1..N line map for voice queries."""
+    lines = md.splitlines()
+    out_lines = []
+    line_map = []
+    line_no = 0
+    in_code = False
+    bs = chr(92)
+
+    for raw in lines:
+        stripped = raw.strip()
+        if stripped.startswith("```"):
+            in_code = not in_code
+            out_lines.append(raw)
+            continue
+        if in_code or not stripped:
+            out_lines.append(raw)
+            continue
+
+        # Strip any old bulky [লাইন X] / [Line X] tags that the LLM or cache might have included
+        cleaned = re.sub(r"\*\*\[(?:লাইন|Line)\s*[০-৯0-9]+\]\*\*\s*", "", stripped)
+        cleaned = re.sub(r"\[(?:লাইন|Line)\s*[০-৯0-9]+\]\s*", "", cleaned)
+        cleaned_no_bullet = re.sub(r"^[-*•]\s+", "", cleaned).strip()
+
+        # Never tag headings, dividers, or final answer summary text
+        if (
+            cleaned.startswith("#")
+            or cleaned in ("---", "***")
+            or re.match(r"^\*\*(?:চূড়ান্ত উত্তর|Final Answer)", cleaned_no_bullet, re.I)
+            or cleaned_no_bullet.startswith(("সুতরাং,", "অতএব, প্রদত্ত", "প্রদত্ত তথ্য", "সূত্র:"))
+        ):
+            out_lines.append(cleaned)
+            continue
+
+        # Only tag genuine sequential math derivation lines (equations with =, ⇒, বা, ∴, \frac, etc.)
+        has_eq = (
+            ("=" in cleaned_no_bullet and ("$" in cleaned_no_bullet or bs in cleaned_no_bullet or any(c.isdigit() for c in cleaned_no_bullet)))
+            or cleaned_no_bullet.startswith(("বা,", "বা ", "⇒", "∴", bs + "Rightarrow", bs + "therefore"))
+            or re.search(r"\$\$.*?\=.*?\$\$", cleaned_no_bullet)
+        )
+
+        if has_eq:
+            line_no += 1
+            bn_idx = _to_bn_num(line_no)
+            # Append a clean hidden marker [[L:N]] at the end of the line so JS can render a tiny right-corner '?'
+            out_lines.append(f"- {cleaned_no_bullet} [[L:{bn_idx}]]")
+            line_map.append(f"Line {line_no} (লাইন {bn_idx}): {cleaned_no_bullet}")
+        else:
+            out_lines.append(cleaned)
+
+    return "\n".join(out_lines), "\n".join(line_map)
+
+
 def _guard_latex(text: str) -> str:
-    """Ensures LaTeX backslashes aren't swallowed during JSON transfer."""
+    """Repairs corrupted LaTeX backslashes, form-feeds (\x0crac), and shorthand frac57."""
     if not text:
         return ""
-    # Standardize KaTeX fraction and clean up common malformed patterns
-    text = re.sub(r"\\f\b", r"\\frac", text)
-    text = re.sub(r"\bfrac\s*\{", r"\\frac{", text)
+    bs = chr(92)
+    # 1. Restore control chars that swallowed backslashes (\f -> \frac, \t -> \text/\tan/\times, \b -> \beta)
+    text = text.replace("\x0crac", bs + "frac").replace("\x0c", bs + "f")
+    text = re.sub(r"\x08(eta|ar|inom|egin|f)", r"\\b\1", text)
+    text = re.sub(r"\t(ext|an|heta|au|imes|hickapprox|herefore)", r"\\t\1", text)
+    text = re.sub(r"\r(ight|ho)", r"\\r\1", text)
+
+    # 2. Fix missing backslash before frac / sqrt / text
+    text = re.sub(r"(?<!\\)\bfrac\s*\{", r"\\frac{", text)
+    text = re.sub(r"(?<!\\)\bsqrt\s*\{", r"\\sqrt{", text)
+    text = re.sub(r"(?<!\\)\btext\s*\{", r"\\text{", text)
+
+    # 3. Fix shorthand `\frac57` or `frac57` or `frac 5 7` -> `\frac{5}{7}`
+    text = re.sub(r"(?:\\)?\bfrac\s*([0-9০-৯a-zA-Z])\s*([0-9০-৯a-zA-Z])(?![0-9০-৯a-zA-Z\}])", r"\\frac{\1}{\2}", text)
+    text = re.sub(r"(?:\\)?\bfrac\s+([0-9০-৯a-zA-Z]+)\s+([0-9০-৯a-zA-Z]+)", r"\\frac{\1}{\2}", text)
+
+    # 4. Merge split equations where `x =` is on one line and `$$...$$` is on the next line
+    text = re.sub(r"(\b[a-zA-Z]\s*=\s*)\n+\s*\$\$([\s\S]+?)\$\$", r"$$\1 \2$$", text)
+    text = re.sub(r"\$([a-zA-Z]\s*=)\$\s*\n*\s*\$\$([\s\S]+?)\$\$", r"$$\1 \2$$", text)
+    # Also keep inline `x = $$...$$` on a single inline/display block
+    text = re.sub(r"([a-zA-Z]\s*=\s*)\$\$([\s\S]+?)\$\$", r"$\1 \2$", text)
     return text
 
 
@@ -195,16 +273,16 @@ def study_solve_problem(parameters: Dict[str, Any], player: Any = None, **kwargs
         subject = _detect_subject(question)
 
     from_screen = str(parameters.get("from_screen") or "no").lower() == "yes"
-    reveal = str(parameters.get("reveal") or "all").lower()
+    # Always start step-by-step from Step 1 unless user explicitly asked for all at once
+    reveal = "steps"
     force_refresh = str(parameters.get("force_refresh") or "no").lower() == "yes"
 
-    # Strict Quiz Integrity Guard: Refuse direct solution if quiz is in progress
+    # When the user explicitly asks to solve/explain a problem on the board,
+    # ensure any stale quiz lock is released so the explanation renders cleanly.
     try:
         from actions import study_quiz
-        if hasattr(study_quiz, "is_quiz_active") and study_quiz.is_quiz_active():
-            q_clean = question.lower()
-            if any(k in q_clean for k in ["quiz", "কুইজ", "পরীক্ষা", "উত্তর", "সমাধান", "option", "mcq", "সঠিক উত্তর"]):
-                return "এটি একটি পরীক্ষা চলছে। পরীক্ষার সময় আমি সরাসরি উত্তর বা সমাধান বলে দিতে পারব না।"
+        if hasattr(study_quiz, "set_quiz_active"):
+            study_quiz.set_quiz_active(False)
     except Exception:
         pass
 
@@ -229,10 +307,14 @@ def study_solve_problem(parameters: Dict[str, Any], player: Any = None, **kwargs
                         subject,
                         reveal,
                     )
+                c_md, c_line_map = _ensure_numbered_lines(c_md)
+                if player and hasattr(player, "study_solution"):
+                    player.study_solution(c_title, c_md, subject, reveal)
                 return (
-                    f"[STUDY_BOARD] (Cached) Solved on Study Board: '{c_title}'\n"
+                    f"[STUDY_BOARD] (Cached) Solved on Study Board (Step 1 shown first): '{c_title}'\n"
                     f"FINAL: {c_final}\n"
-                    f"Solution cards rendered successfully."
+                    f"[SOLUTION_LINES_CONTEXT]:\n{c_line_map or c_md[:2500]}\n\n"
+                    f"[FULL_SOLUTION_MARKDOWN]:\n{c_md[:3000]}"
                 )
 
         # 3. Post 'Solving...' status to the board
@@ -256,10 +338,14 @@ def study_solve_problem(parameters: Dict[str, Any], player: Any = None, **kwargs
             f"Domain Guide: {subj_guide}\n\n"
             "Formatting & Bangla Formula Rules:\n"
             "1. Title Line: Start with a concise title in clean Bangla: `# <বাংলা শিরোনাম>` (Never use English titles).\n"
-            "2. Break the solution into logical, numbered step cards using markdown `## ` headings:\n"
-            "   - `## ১. প্রদত্ত তথ্য ও সূত্র` (Given & Formulas)\n"
-            "   - `## ২. গণনা ও ধাপ` (Step-by-Step Derivation)\n"
-            "   - `## ৩. চূড়ান্ত উত্তর` (Final Answer)\n"
+            "2. Break the solution into logical, numbered step cards using markdown `## ` headings (ALWAYS start the very first card with `## ধাপ ১: প্রদত্ত তথ্য ও সূত্র` so nothing is cut off at the top):\n"
+            "   - `## ধাপ ১: প্রদত্ত তথ্য ও সূত্র` (Given & Formulas)\n"
+            "   - `## ধাপ ২: পর্যায়ক্রমিক গণনা ও সমীকরণ` (Step-by-Step Derivation)\n"
+            "   - `## ধাপ ৩: চূড়ান্ত উত্তর` (Final Answer)\n"
+            "2B. SEQUENTIAL MATH EQUATIONS:\n"
+            "   - In Step 2 (`## ধাপ ২: পর্যায়ক্রমিক গণনা ও সমীকরণ`), write each algebraic/calculation line on its own line starting with `বা, ` or `⇒ ` or `∴ ` inside `$...$` (e.g., `- বা, $3x = 5$`).\n"
+            "   - Always keep both sides of an equation inside the SAME `$...$` or `$$...$$` block (e.g., `$x = \\frac{5}{7}$`). NEVER put `x =` outside and `\\frac{5}{7}` on a new line!\n"
+            "   - ALWAYS write fractions with explicit curly braces: `\\frac{a}{b}` (NEVER write `frac57` or `\\frac57`).\n"
             "3. Bangla Scientific Terminology & LaTeX Formulas:\n"
             "   - Strictly require ALL formula names, scientific labels, and variable expansions in clean Bangla.\n"
             "   - Format formula titles and variable names inside LaTeX using \\text{...} in Bangla (e.g., $$\\frac{\\text{মোলার ভর}}{\\text{স্থূল সংকেতের ভর}}$$, $$\\text{বল} = \\text{ভর} \\times \\text{ত্বরণ}$$).\n"
@@ -296,6 +382,7 @@ def study_solve_problem(parameters: Dict[str, Any], player: Any = None, **kwargs
             return "[STUDY_BOARD] Solver failed to get a response from the model router."
 
         solution_md = _fix_bangla_unicode(_guard_latex(solution_raw.strip()))
+        solution_md, line_map_str = _ensure_numbered_lines(solution_md)
 
         # Extract Title
         title_match = re.search(r"^#\s+(.+)$", solution_md, re.M)
@@ -325,12 +412,14 @@ def study_solve_problem(parameters: Dict[str, Any], player: Any = None, **kwargs
                 },
             )
 
-        # Return concise tool feedback so Gemini Live can speak 1-2 encouraging summary sentences
+        # Return tool feedback WITH complete Line-by-Line map so JARVIS can answer "explain line N"
         return (
-            f"[STUDY_BOARD] Solved on Study Board: '{title}'\n"
-            f"Subject: {subject}\n"
-            f"FINAL: {final_ans}\n"
-            f"Cards: Rendered with LaTeX equations. Briefly tell the student the core idea and final answer."
+            f"[STUDY_BOARD] Solved on Study Board (Step-by-Step mode — Step 1 is now shown at the top; student can press Enter/Space for next steps): '{title}'\n"
+            f"Subject: {subject} | FINAL: {final_ans}\n"
+            f"Briefly introduce Step 1 in Bangla. Tell the student they can press Enter for the next step, or ask you to explain any specific line number (e.g. '৩ নম্বর লাইনটা বুঝিয়ে দাও').\n\n"
+            f"[SOLUTION_LINES_CONTEXT — USE THIS WHEN STUDENT ASKS ABOUT A SPECIFIC LINE NUMBER]:\n"
+            f"{line_map_str or solution_md[:2500]}\n\n"
+            f"[FULL_SOLUTION_MARKDOWN]:\n{solution_md[:3000]}"
         )
     except Exception as e:
         if player and hasattr(player, "study_status"):
