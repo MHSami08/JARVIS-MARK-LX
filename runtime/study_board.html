@@ -222,6 +222,37 @@
     display: flex; flex-direction: column; gap: 4px;
   }
   .mm-subleaf { font-size: 13.5px; color: #9fc6e6; padding: 2px 0; }
+
+    /* Single Unified Quiz Explanation Card */
+    .unified-explanation-box {
+        margin-top: 16px;
+        padding: 16px 18px;
+        border-radius: 8px;
+        font-size: 14px;
+        line-height: 1.65;
+        color: #e2e8f0;
+        animation: fadeIn 0.25s ease-out;
+        display: none;
+    }
+    .unified-explanation-box.correct {
+        background: rgba(13, 40, 32, 0.90);
+        border: 1px solid rgba(52, 211, 153, 0.5);
+    }
+    .unified-explanation-box.incorrect {
+        background: rgba(48, 16, 20, 0.90);
+        border: 1px solid rgba(248, 113, 113, 0.5);
+    }
+    .verdict-header {
+        font-weight: 700;
+        font-size: 15px;
+        margin-bottom: 8px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .verdict-header.correct { color: #34d399; }
+    .verdict-header.incorrect { color: #f87171; }
+
 </style>
 </head>
 <body>
@@ -330,6 +361,7 @@ let bridge = null, activeMode = "board";
 let sections = [], shown = 0;
 let quizState = null;
 let flashState = null;
+let lastSolution = null, lastQuiz = null, lastFlashcards = null;
 
 function setModeBadge(text) { $("mode-badge").textContent = text; }
 function typeset(el) {
@@ -423,10 +455,11 @@ function add(i) {
 }
 
 function bar() {
-  $("btn-prev").style.display = "none";
+  $("btn-prev").style.display = "";
+  $("btn-prev").disabled = !(shown > 1);
   $("btn-explain").style.display = "";
   const n = sections.length;
-  $("prog").textContent = n ? `Step ${shown} / ${n}  ·  [Enter / Space] Next` : "";
+  $("prog").textContent = n ? `Step ${shown} / ${n}  ·  [Enter / Space] Next  ·  [◂ Prev] Previous` : "";
   $("btn-next").textContent = "Next step ▸";
   $("btn-next").disabled = !(shown < n);
   $("btn-explain").disabled = !shown;
@@ -438,6 +471,13 @@ function renderQuizQuestion() {
   if (st.idx >= st.questions.length) { finishQuiz(); return; }
   const q = st.questions[st.idx];
   const opts = q.options || [];
+  st.userAnswers = st.userAnswers || {};
+  const hasAnswered = st.userAnswers[st.idx] !== undefined;
+  st.answered = hasAnswered;
+  const chosenIdx = hasAnswered ? st.userAnswers[st.idx] : -1;
+  const ansIdx = typeof q.answer === "number" ? q.answer : 0;
+  const isRight = chosenIdx === ansIdx;
+
   $("board").innerHTML = "";
   const card = document.createElement("section");
   card.className = "card";
@@ -445,20 +485,36 @@ function renderQuizQuestion() {
   html += `<div style="font-size:18px; margin-bottom:14px;">${inline(q.question || q.q || "")}</div>`;
   html += `<div id="quiz-opts">`;
   opts.forEach((opt, idx) => {
-    html += `<button class="quiz-opt" data-idx="${idx}">
+    let optClass = "quiz-opt";
+    if (hasAnswered) {
+      optClass += " locked";
+      if (idx === ansIdx) optClass += " correct";
+      else if (idx === chosenIdx && !isRight) optClass += " wrong";
+    }
+    html += `<button class="${optClass}" data-idx="${idx}">
       <span class="quiz-key">${idx + 1}</span>
       <span>${inline(String(opt))}</span>
     </button>`;
   });
-  html += `</div><div id="quiz-exp" class="quiz-explain" style="display:none"></div>`;
+  html += `</div><div id="quiz-exp" class="quiz-explain" style="${hasAnswered ? "display:block" : "display:none"}">`;
+  if (hasAnswered) {
+    const verdict = isRight ? "✓ সঠিক উত্তর!" : `✕ ভুল উত্তর — সঠিক উত্তর: (${ansIdx + 1}) ${opts[ansIdx] || ""}`;
+    const explanation = q.explain || q.explanation || q.note || "";
+    html += `<div style="font-weight:700; font-size:16px; margin-bottom:6px; color:${isRight ? '#00ff88' : '#ff8a9b'}">${inline(verdict)}</div>` +
+            (explanation ? `<div style="margin-top:6px; line-height:1.75; font-size:15.5px; color:#d7e6f5;">${inline(explanation).replace(/\n/g, "<br>")}</div>` : "");
+  }
+  html += `</div>`;
   card.innerHTML = html;
   $("board").appendChild(card);
   typeset(card);
-  card.querySelectorAll(".quiz-opt").forEach((btn) => { btn.onclick = () => selectQuizOption(+btn.dataset.idx); });
-  $("prog").textContent = `Question ${st.idx + 1} / ${st.questions.length}  ·  Press [1-${opts.length}] to Answer, [Enter] for Next`;
-  $("btn-prev").style.display = "none";
+  if (!hasAnswered) {
+    card.querySelectorAll(".quiz-opt").forEach((btn) => { btn.onclick = () => selectQuizOption(+btn.dataset.idx); });
+  }
+  $("prog").textContent = `প্রশ্ন ${st.idx + 1} / ${st.questions.length}  ·  [1-4 / A-D] উত্তর  ·  [◂ / ArrowLeft] পূর্বের প্রশ্ন  ·  [Enter] পরের প্রশ্ন`;
+  $("btn-prev").style.display = "";
+  $("btn-prev").disabled = (st.idx <= 0);
   $("btn-explain").style.display = "none";
-  $("btn-next").textContent = st.idx + 1 === st.questions.length ? "Finish Quiz ▸" : "Next Question ▸";
+  $("btn-next").textContent = st.idx + 1 === st.questions.length ? "কুইজ সমাপ্ত ▸" : "পরবর্তী প্রশ্ন ▸";
   $("btn-next").disabled = !st.answered;
 }
 
@@ -468,6 +524,8 @@ function selectQuizOption(choiceIdx) {
   const q = st.questions[st.idx];
   const opts = q.options || [];
   if (choiceIdx < 0 || choiceIdx >= opts.length) return;
+  st.userAnswers = st.userAnswers || {};
+  st.userAnswers[st.idx] = choiceIdx;
   st.answered = true;
   const ansIdx = typeof q.answer === "number" ? q.answer : 0;
   const isRight = choiceIdx === ansIdx;
@@ -475,7 +533,7 @@ function selectQuizOption(choiceIdx) {
   else st.mistakes.push({
     question: q.question || q.q || "", options: opts,
     given: opts[choiceIdx], answer: opts[ansIdx], answer_idx: ansIdx,
-    explain: q.explain || q.note || ""
+    explain: q.explain || q.explanation || q.note || ""
   });
   const btns = document.querySelectorAll(".quiz-opt");
   btns.forEach((b, i) => {
@@ -484,8 +542,10 @@ function selectQuizOption(choiceIdx) {
     else if (i === choiceIdx && !isRight) b.classList.add("wrong");
   });
   const exp = $("quiz-exp");
-  const verdict = isRight ? "✓ Correct!" : `✕ Incorrect — Correct answer: (${ansIdx + 1}) ${opts[ansIdx] || ""}`;
-  exp.innerHTML = `<b>${esc(verdict)}</b>` + (q.explain ? `<div style="margin-top:4px">${inline(q.explain)}</div>` : "");
+  const verdict = isRight ? "✓ সঠিক উত্তর!" : `✕ ভুল উত্তর — সঠিক উত্তর: (${ansIdx + 1}) ${opts[ansIdx] || ""}`;
+  const explanation = q.explain || q.explanation || q.note || "";
+  exp.innerHTML = `<div style="font-weight:700; font-size:16px; margin-bottom:6px; color:${isRight ? '#00ff88' : '#ff8a9b'}">${inline(verdict)}</div>` +
+                  (explanation ? `<div style="margin-top:6px; line-height:1.75; font-size:15.5px; color:#d7e6f5;">${inline(explanation).replace(/\n/g, "<br>")}</div>` : "");
   exp.style.display = "block";
   typeset(exp);
   $("btn-next").disabled = false;
@@ -496,6 +556,7 @@ function retryCurrentQuiz() {
   quizState.idx = 0;
   quizState.score = 0;
   quizState.answered = false;
+  quizState.userAnswers = {};
   quizState.mistakes = [];
   renderQuizQuestion();
 }
@@ -514,6 +575,7 @@ function retryMistakesOnly() {
     idx: 0,
     score: 0,
     answered: false,
+    userAnswers: {},
     mistakes: []
   };
   renderQuizQuestion();
@@ -608,6 +670,7 @@ function buildMindmapHTML(root) {
 const ops = {
   render(p) {
     activeMode = "board"; setModeBadge("SOLUTION");
+    lastSolution = p;
     $("title").textContent = (p.title || "STUDY STATION").toUpperCase();
     $("chip").textContent = p.subject || "";
     $("chip").style.display = p.subject ? "" : "none";
@@ -629,16 +692,71 @@ const ops = {
     if (shown < sections.length) add(shown);
     bar();
   },
+  prev() {
+    if (activeMode === "quiz" && quizState) {
+      if (quizState.idx > 0) {
+        quizState.idx--;
+        renderQuizQuestion();
+      }
+      return;
+    }
+    if (activeMode === "flashcards" && flashState) {
+      if (flashState.idx > 0) {
+        flashState.idx--;
+        flashState.flipped = false;
+        renderFlashcard();
+      }
+      return;
+    }
+    if (activeMode === "board" && shown > 1) {
+      shown--;
+      $("board").innerHTML = "";
+      const cur = shown;
+      for (let i = 0; i < cur; i++) add(i);
+      bar();
+      return;
+    }
+  },
+  restore(p) {
+    const target = (p && p.target) || activeMode;
+    if ((target === "quiz" || activeMode === "quiz") && quizState && quizState.questions && quizState.questions.length) {
+      activeMode = "quiz";
+      setModeBadge("QUIZ");
+      renderQuizQuestion();
+    } else if ((target === "solution" || target === "board" || activeMode === "board") && sections && sections.length) {
+      activeMode = "board";
+      setModeBadge("SOLUTION");
+      $("board").innerHTML = "";
+      for (let i = 0; i < shown; i++) add(i);
+      bar();
+    } else if (lastQuiz && lastQuiz.questions && lastQuiz.questions.length) {
+      ops.quiz(lastQuiz);
+    } else if (lastSolution) {
+      ops.render(lastSolution);
+    } else if (activeMode === "flashcards" && flashState) {
+      renderFlashcard();
+    }
+  },
   quiz(p) {
     activeMode = "quiz"; setModeBadge("QUIZ");
+    lastQuiz = p;
     $("title").textContent = (p.title || "PRACTICE QUIZ").toUpperCase();
     $("chip").textContent = p.subject || "";
     $("chip").style.display = p.subject ? "" : "none";
-    quizState = { title: p.title || "Quiz", questions: p.questions || [], idx: 0, score: 0, answered: false, mistakes: [] };
+    quizState = {
+      title: p.title || "Quiz",
+      questions: p.questions || [],
+      idx: 0,
+      score: 0,
+      answered: false,
+      userAnswers: {},
+      mistakes: []
+    };
     renderQuizQuestion();
   },
   flashcards(p) {
     activeMode = "flashcards"; setModeBadge("FLASHCARDS");
+    lastFlashcards = p;
     $("title").textContent = (p.title || "FLASHCARDS").toUpperCase();
     $("chip").textContent = p.subject || "";
     $("chip").style.display = p.subject ? "" : "none";
@@ -658,7 +776,7 @@ const ops = {
     $("btn-next").disabled = true;
   },
   status(p) {
-    sections = []; shown = 0; $("board").innerHTML = "";
+    $("board").innerHTML = "";
     const d = document.createElement("div"); d.className = "status"; d.textContent = p.text || "";
     $("board").appendChild(d); bar();
   },
@@ -666,16 +784,13 @@ const ops = {
     activeMode = "board"; setModeBadge("BOARD");
     ops.status({ text: "Ask a question to start." });
     $("title").textContent = "STUDY STATION"; $("chip").style.display = "none";
+    send("quiz_complete", { clear: true });
   },
 };
 
 const send = (type, data) => { if (bridge) bridge.userEvent(JSON.stringify({ type, ...(data || {}) })); };
 $("btn-next").onclick = () => ops.next();
-$("btn-prev").onclick = () => {
-  if (activeMode === "flashcards" && flashState && flashState.idx > 0) {
-    flashState.idx--; flashState.flipped = false; renderFlashcard();
-  }
-};
+$("btn-prev").onclick = () => ops.prev();
 $("btn-explain").onclick = () => send("explain_step", { n: shown, title: (sections[shown - 1] || {}).title || "" });
 $("btn-reset").onclick = () => ops.clear();
 $("btn-exit").onclick = () => send("exit");
@@ -687,6 +802,8 @@ window.addEventListener("keydown", (e) => {
     if (e.key === "0") { e.preventDefault(); applyZoom(110); return; }
     if (e.key === "r" || e.key === "R") { e.preventDefault(); ops.clear(); return; }
   }
+  if (['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+
   if (activeMode === "quiz" && quizState) {
     const isFinished = quizState.idx >= quizState.questions.length;
     if (isFinished) {
@@ -695,10 +812,18 @@ window.addEventListener("keydown", (e) => {
       else if (e.key === "Enter") { e.preventDefault(); ops.clear(); }
       return;
     }
-    if (e.key >= "1" && e.key <= "9") {
+    const keyUp = e.key.toUpperCase();
+    const alphaMap = { "A": 0, "B": 1, "C": 2, "D": 3 };
+    if (keyUp in alphaMap) {
+      e.preventDefault();
+      selectQuizOption(alphaMap[keyUp]);
+    } else if (e.key >= "1" && e.key <= "9") {
       e.preventDefault();
       selectQuizOption(parseInt(e.key, 10) - 1);
-    } else if (e.key === "Enter" && quizState.answered) {
+    } else if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      ops.prev();
+    } else if ((e.key === "Enter" || e.key === " " || e.code === "Space") && quizState.answered) {
       e.preventDefault();
       ops.next();
     }
@@ -711,10 +836,13 @@ window.addEventListener("keydown", (e) => {
       ops.next();
     } else if (e.key === "ArrowLeft" && flashState.idx > 0) {
       e.preventDefault();
-      flashState.idx--; flashState.flipped = false; renderFlashcard();
+      ops.prev();
     }
   } else if (activeMode === "board") {
-    if ((e.key === "Enter" || e.code === "Space") && shown < sections.length) {
+    if (e.key === "ArrowLeft" && shown > 1) {
+      e.preventDefault();
+      ops.prev();
+    } else if ((e.key === "Enter" || e.code === "Space") && shown < sections.length) {
       e.preventDefault();
       ops.next();
     }
@@ -732,6 +860,7 @@ if (typeof renderMathInElement === "undefined") {
 } else {
   ops.status({ text: "Study board is waiting for JARVIS." });
 }
+
 </script>
 </body>
 </html>
