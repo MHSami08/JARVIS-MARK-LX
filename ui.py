@@ -55,7 +55,7 @@ except Exception as _e:            # noqa: BLE001 - reported, never fatal
 from PyQt6.QtWidgets import (
     QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSplitter,
-    QGraphicsScene, QGraphicsView, QGraphicsDropShadowEffect,
+    QGraphicsScene, QGraphicsView, QGraphicsDropShadowEffect, QGraphicsOpacityEffect,
     QStackedWidget, QTextEdit, QVBoxLayout, QWidget, QProgressBar,
 )
 from PyQt6.QtWidgets import QLayout as _QLayout
@@ -64,6 +64,10 @@ from PyQt6.QtWidgets import QLayout as _QLayout
 # has to be loaded before the QApplication exists.
 from core import study_guard
 from core.study_canvas import StudyCanvasWidget, HAVE_STUDY
+try:
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+except Exception:
+    pass
 
 # ── Native readability ──────────────────────────────────────────────────────
 # One platform-appropriate monospace face for the whole HUD. Every widget below
@@ -98,10 +102,6 @@ class QFont(_QtFont):
             # If the preferred face isn't installed Qt falls through this list.
             self.setFamilies([MONO_FONT] + _MONO_FALLBACKS)
 
-try:
-    from core.avatar import HoloAvatar
-except Exception:      # pragma: no cover — HUD must never die over cosmetics
-    HoloAvatar = None
 
 
 def _base_dir() -> Path:
@@ -463,7 +463,10 @@ class _SysMetrics:
         if self._pynvml_ok is not False:
             try:
                 if self._pynvml_h is None:
-                    import pynvml  # type: ignore
+                    import warnings
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings("ignore", category=FutureWarning)
+                        import pynvml  # type: ignore
                     pynvml.nvmlInit()
                     self._pynvml    = pynvml
                     self._pynvml_h  = pynvml.nvmlDeviceGetHandleByIndex(0)
@@ -556,23 +559,8 @@ class HudCanvas(QWidget):
         self.state    = "INITIALISING"
         self._assistant_name = assistant_name
 
-        # The holographic head that fills the HUD. If it could not be imported
-        # we fall back to the old glowing core so the panel is never empty.
-        self._avatar = None
-        if HoloAvatar is not None:
-            try:
-                self._avatar = HoloAvatar()
-            except Exception:
-                self._avatar = None
-
-        # Which centrepiece to draw. Read once here and changed live by the
-        # settings toggle; the avatar object is kept either way so switching
-        # back is instant and costs no reload.
-        try:
-            from memory.config_manager import get_hud_style
-            self.hud_style = get_hud_style()
-        except Exception:
-            self.hud_style = "face"
+        # Arc Reactor Core is the exclusive permanent HUD centerpiece.
+        self.hud_style = "core"
         self._core_phase = 0.0
 
         self._tick       = 0
@@ -611,65 +599,12 @@ class HudCanvas(QWidget):
         self._tmr.start(16)
 
     def glance(self, dx: float, dy: float, hold: float = 1.1) -> None:
-        """Ask the avatar to look somewhere for a moment (see HoloAvatar.glance)."""
-        try:
-            if self._avatar is not None:
-                self._avatar.glance(dx, dy, hold)
-        except Exception:
-            pass
+        """Compatibility no-op (Arc Reactor HUD does not use head-glance)."""
+        pass
 
     def push_visemes(self, frames, hop: float, at: float) -> None:
-        """Thread-safe: hand over a schedule of (level, openness, width) frames.
-
-        The playback thread writes up to 200 ms of audio in one go, so a single
-        averaged level would only move the mouth five times a second — enough to
-        flap, nowhere near enough to articulate. It instead posts the whole
-        slice's worth of 20 ms frames here and `_step()` plays them out against
-        the wall clock, in step with the audio going to the speakers.
-
-        `at` is the wall-clock time this batch will *begin to sound*, which the
-        caller tracks as a playback cursor. It is not the time of the call, and
-        the difference is the whole point: `stream.write` returns once the buffer
-        accepts the samples, so consecutive batches are handed over far faster
-        than they play. Anchoring each one to "now" made every batch start while
-        its predecessor was still sounding, so each schedule replaced the last
-        after a couple of frames and the mouth only ever played the opening
-        instant of every 200 ms — the reason it did not match the words.
-
-        Successive batches are therefore *appended* into one continuous
-        timeline, not swapped in. A paragraph is one schedule; the mouth stops
-        falling into a gap at every chunk boundary and having to climb back out.
-        """
-        try:
-            if not frames:
-                return
-            hop = max(1e-3, float(hop))
-            at = float(at)
-            new = list(frames)
-            cur = self._visemes
-            if cur is not None:
-                old, t0, ohop = cur
-                if abs(ohop - hop) < 1e-6:
-                    # Where in the existing timeline does this batch land?
-                    i = int(round((at - t0) / hop))
-                    if 0 <= i <= len(old) + 1:
-                        # Continues (or slightly overlaps) what is already
-                        # queued: extend rather than restart. Drop whatever has
-                        # already been played so the list cannot grow without
-                        # bound over a long reply.
-                        merged = old[:i] + new
-                        played = int((time.time() - t0) / hop) - 2
-                        if played > 60:
-                            merged = merged[played:]
-                            t0 += played * hop
-                            if self._vis_i is not None:
-                                self._vis_i = max(0, self._vis_i - played)
-                        self._visemes = (merged, t0, hop)
-                        return
-            self._visemes = (new, at, hop)
-            self._vis_i = None
-        except Exception:
-            pass
+        """Compatibility no-op (Arc Reactor HUD uses direct audio level)."""
+        pass
 
     def set_audio_level(self, level: float) -> None:
         """Thread-safe entry point for the audio threads. Stores the louder of
@@ -704,82 +639,42 @@ class HudCanvas(QWidget):
         self._tick += 1
         now = time.time()
 
-        # ── Live audio reactivity ────────────────────────────────────────────
-        # A viseme schedule, if one is playing, gives both the level and the
-        # mouth shape for this exact instant; otherwise fall back to the peak
-        # level the audio threads pushed in.
-        v_open = v_wide = v_level = None
-        v_seq = None
-        sched = self._visemes
-        if sched is not None:
-            frames, t0, hop = sched
-            i = int((now - t0) / hop)
-            if 0 <= i < len(frames):
-                # Hand over *every* frame since the last tick, not just the one
-                # under the cursor. This timer runs at 60 Hz but the paint is
-                # throttled and the machine may be busy, so a tick can span two
-                # or three 20 ms frames — and a consonant closure is only two
-                # frames long. Sampling one and discarding the rest is how the
-                # closures between words went missing.
-                j = self._vis_i if self._vis_i is not None else i
-                v_seq = frames[max(0, j):i + 1]
-                self._vis_i = max(j, i + 1)
-                v_level, v_open, v_wide = frames[i]
-                if v_seq:
-                    peak = max(f[0] for f in v_seq)
-                    if peak > self._live_amp:
-                        self._live_amp = peak
-            elif i >= len(frames):
-                self._visemes = None        # schedule spent
-                self._vis_i = None
-
         # Audio threads push peaks into _live_amp; decay it toward silence so
         # gaps between chunks fade out instead of freezing, then smooth it.
         self._live_amp *= 0.86
         self._amp_disp += (self._live_amp - self._amp_disp) * 0.45
         amp = self._amp_disp
 
-        # The avatar animates off the very same smoothed level the waveform
-        # uses — one audio source, so the mouth can never drift out of sync.
         dt = now - self._step_t
         self._step_t = now
-        # Integrated, not derived from absolute time: multiplying wall-clock by
-        # a rate that changes with state jumps the rings the instant JARVIS
-        # starts talking. Same lesson the head's sway taught.
+        # Integrated phase for Arc Reactor ring rotations
         self._core_phase += min(0.10, max(0.0, dt))
 
-        if self._avatar is not None and self.hud_style == "face":
-            self._avatar.step(dt, amp, speaking=self.speaking,
-                              muted=self.muted, state=self.state,
-                              v_open=v_open, v_wide=v_wide or 0.0,
-                              v_level=v_level, v_seq=v_seq,
-                              v_hop=(sched[2] if sched is not None else 0.02))
-        else:
-            # Fallback core: slow "breathing" base target, lifted by the level.
-            if now - self._last_t > (0.12 if self.speaking else 0.5):
-                if self.speaking:
-                    self._base_scale = 1.03
-                    self._base_halo  = 122.0
-                elif self.muted:
-                    self._base_scale = random.uniform(0.998, 1.002)
-                    self._base_halo  = random.uniform(15, 28)
-                else:
-                    self._base_scale = random.uniform(1.001, 1.008)
-                    self._base_halo  = random.uniform(48, 68)
-                self._last_t = now
-
-            if self.muted:
-                self._tgt_scale, self._tgt_halo = self._base_scale, self._base_halo
-            elif self.speaking:
-                self._tgt_scale = self._base_scale + amp * 0.13
-                self._tgt_halo  = self._base_halo  + amp * 95.0
+        # Arc Reactor Core: slow "breathing" base target, lifted by the level.
+        if now - self._last_t > (0.12 if self.speaking else 0.5):
+            if self.speaking:
+                self._base_scale = 1.03
+                self._base_halo  = 122.0
+            elif self.muted:
+                self._base_scale = random.uniform(0.998, 1.002)
+                self._base_halo  = random.uniform(15, 28)
             else:
-                self._tgt_scale = self._base_scale + amp * 0.06
-                self._tgt_halo  = self._base_halo  + amp * 75.0
+                self._base_scale = random.uniform(1.001, 1.008)
+                self._base_halo  = random.uniform(48, 68)
+            self._last_t = now
 
-            sp = 0.38 if self.speaking else (0.30 if amp > 0.02 else 0.15)
-            self._scale += (self._tgt_scale - self._scale) * sp
-            self._halo  += (self._tgt_halo  - self._halo)  * sp
+        if self.muted:
+            self._tgt_scale, self._tgt_halo = self._base_scale, self._base_halo
+        elif self.speaking:
+            self._tgt_scale = self._base_scale + amp * 0.13
+            self._tgt_halo  = self._base_halo  + amp * 95.0
+        else:
+            self._tgt_scale = self._base_scale + amp * 0.06
+            self._tgt_halo  = self._base_halo  + amp * 75.0
+
+        sp = 0.38 if self.speaking else (0.30 if amp > 0.02 else 0.15)
+        self._scale += (self._tgt_scale - self._scale) * sp
+        self._halo  += (self._tgt_halo  - self._halo)  * sp
 
         self._blink_tick += 1
         if self._blink_tick >= 38:
@@ -801,7 +696,7 @@ class HudCanvas(QWidget):
         if _blinked or (self._paint_tick % 2 == 0 if active
                         else self._paint_tick % 3 == 0):
             # Nothing is on screen when the window is hidden or minimised, so
-            # rendering the avatar into it is pure waste — and this app is meant
+            # rendering the core into it is pure waste — and this app is meant
             # to sit running all day. The animation state above keeps stepping,
             # so it picks up mid-motion instead of snapping when you come back.
             if self._on_screen():
@@ -1000,40 +895,12 @@ class HudCanvas(QWidget):
             self._grid_key   = _gkey
         p.drawPixmap(0, 0, self._grid_cache)
 
-        # ── holographic head ────────────────────────────────────────────────
-        # Sized to the band between the top of the canvas and the status line,
-        # capped by width, so it fills the HUD at any window size — including
-        # fullscreen — without ever colliding with the status text below.
+        # ── Arc Reactor Core ────────────────────────────────────────────────
         _sy_status = cy + fw * 0.40
-        if self._avatar is not None and self.hud_style == "face":
-            _band_t = 12.0
-            _band_h = max(60.0, _sy_status - 12.0 - _band_t)
-            _r_head = min(fw * 0.355, _band_h / (self._avatar.SPAN + 0.08))
-            _head_cy = _band_t + (_band_h - self._avatar.SPAN * _r_head) / 2.0 + _r_head
-
-            if self.muted:
-                _main = _acc = qcol(C.MUTED_C)
-            else:
-                _main = qcol(C.PRI)
-                if self.speaking:
-                    _acc = qcol(C.ACC)
-                elif self.state in ("THINKING", "PROCESSING"):
-                    _acc = qcol(C.ACC2)
-                elif self.state == "LISTENING":
-                    _acc = qcol(C.GREEN)
-                else:
-                    _acc = qcol(C.PRI)
-            self._avatar.paint(p, cx, _head_cy, _r_head, _main, _acc, qcol(C.BG))
-
-        # reactor core — the other centrepiece, and the fallback if the head
-        # could not be built. There is no third path: the old face.png branch
-        # was unreachable (no such file ships) and the bare orb it fell through
-        # to is what this replaces.
-        else:
-            _band_t = 12.0
-            _band_h = max(60.0, _sy_status - 12.0 - _band_t)
-            _r = min(W * 0.46, _band_h / 2.0)
-            self._paint_core(p, cx, _band_t + _band_h / 2.0, _r, W, _band_h)
+        _band_t = 12.0
+        _band_h = max(60.0, _sy_status - 12.0 - _band_t)
+        _r = min(W * 0.46, _band_h / 2.0)
+        self._paint_core(p, cx, _band_t + _band_h / 2.0, _r, W, _band_h)
 
         # status text
         sy = _sy_status
@@ -4076,6 +3943,20 @@ class SideDrawer(_HudOverlay):
             self.hide()
 
 
+
+class _ViewportStage(QWidget):
+    """Holds the connected [System Monitor + HUD/Board] sliding track underneath,
+    and the [Activity Log] panel on top at the right edge (two-whiteboards effect)."""
+
+    def __init__(self, win: "MainWindow", parent=None):
+        super().__init__(parent)
+        self._win = win
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._win._layout_stage()
+
+
 class MainWindow(QMainWindow):
     _log_sig        = pyqtSignal(str)
     _state_sig      = pyqtSignal(str)
@@ -4097,8 +3978,9 @@ class MainWindow(QMainWindow):
     _quiz_sig       = pyqtSignal(str, object, object)  # (topic, questions, grader)
     _quiz_hide_sig  = pyqtSignal()
     _review_sig     = pyqtSignal(str, str, object, object)  # document review payload
-    _study_mode_sig  = pyqtSignal(bool)      # Study Station on/off (thread-safe)
+    _study_mode_sig  = pyqtSignal(bool)  # (on, notify_voice) — Study Station on/off (thread-safe)
     _study_board_sig = pyqtSignal(str, str)  # (op, JSON) -> study canvas
+    _notepad_set_sig = pyqtSignal(str)       # Thread-safe notepad text updater
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -4125,6 +4007,7 @@ class MainWindow(QMainWindow):
         )
 
         self.on_text_command   = None
+        self.request_say       = None
         self.on_remote_clicked = None   # callable: () -> (url, key) | None
         self.on_interrupt      = None   # callable: () -> None — stop JARVIS mid-speech
         self.on_voice_change   = None   # callable: () -> None — rebuild session with new voice
@@ -4164,12 +4047,17 @@ class MainWindow(QMainWindow):
         root.setSpacing(0)
         root.addWidget(self._build_header())
 
-        body = QHBoxLayout()
-        body.setContentsMargins(8, 8, 8, 8)
-        body.setSpacing(8)
+        self._stage = _ViewportStage(self)
+        self._slide_offset = 0          # 0 = normal, -(_LEFT_W + 8) = slid left for Study Mode
+        self._chat_offset = 0           # 0 = chat visible, +(_RIGHT_W + 8) = chat slid off right
+        self._slide_track = QWidget(self._stage)
+        self._slide_track.setStyleSheet('background: transparent;')
+        track_lay = QHBoxLayout(self._slide_track)
+        track_lay.setContentsMargins(0, 0, 0, 0)
+        track_lay.setSpacing(8)
 
         self._left_panel = self._build_left_panel()
-        body.addWidget(self._left_panel, stretch=0)
+        track_lay.addWidget(self._left_panel, stretch=0)
 
         # Center column: HUD + resizable content panel via QSplitter
         self.hud = HudCanvas(face_path, _display)
@@ -4215,7 +4103,7 @@ class MainWindow(QMainWindow):
         # Built exactly like the camera page above and stacked beside it,
         # because it is the same idea: something takes the centre of the HUD
         # for a while and then gives it back. Sharing the stack rather than
-        # inventing a second mechanism means the avatar, the camera and a video
+        # inventing a second mechanism means the core, the camera and a video
         # can never be on screen at once.
         self._video_split = False        # is the sound a separate stream?
         self._video_auto_muted = False   # did JARVIS close the mic, or the user?
@@ -4340,6 +4228,7 @@ class MainWindow(QMainWindow):
         self._study_canvas.user_event.connect(self._on_study_event)
         self._hud_cam_stack.addWidget(self._study_canvas)
         self._study_idx = self._hud_cam_stack.indexOf(self._study_canvas)
+        self._study_canvas.ensure_loaded()
 
         self._center_split = QSplitter(Qt.Orientation.Vertical)
         self._center_split.setStyleSheet(f"""
@@ -4375,12 +4264,13 @@ class MainWindow(QMainWindow):
         self._work_split.setStretchFactor(0, 1)
         self._work_split.setStretchFactor(1, 3)
         self._work_split.setCollapsible(1, False)
-        body.addWidget(self._work_split, stretch=5)
+        track_lay.addWidget(self._work_split, stretch=1)
 
         self._right_panel = self._build_right_panel()
-        body.addWidget(self._right_panel, stretch=0)
+        self._right_panel.setParent(self._stage)
+        self._right_panel.raise_()
 
-        root.addLayout(body, stretch=1)
+        root.addWidget(self._stage, stretch=1)
         root.addWidget(self._build_footer())
 
         # Quick-access drawer (floating overlay, built after central widget layout is done)
@@ -4426,6 +4316,7 @@ class MainWindow(QMainWindow):
         self._review_sig.connect(self._show_review)
         self._study_mode_sig.connect(self._set_study_mode)
         self._study_board_sig.connect(self._on_study_board)
+        self._notepad_set_sig.connect(self._set_notepad_text_slot)
         self._cam_stop = threading.Event()
 
         # Camera preview overlay (child of central widget, positioned in resizeEvent)
@@ -4466,62 +4357,101 @@ class MainWindow(QMainWindow):
             pw, ph,
         )
 
-    # --- Study Station -------------------------------------------------------
+    # --- Study Station (Connected Sliding Track Architecture) ----------------
+    def _layout_stage(self) -> None:
+        """Position the connected [System Monitor + HUD/Board] track and the
+        [Activity Log] foreground whiteboard without squishing any widget."""
+        if not hasattr(self, "_stage"):
+            return
+        W = self._stage.width()
+        H = self._stage.height()
+        pad = 8
+        avail_h = max(100, H - pad * 2)
+
+        # Right panel (Activity Log) sits in the foreground on the right
+        rx = W - pad - _RIGHT_W + int(getattr(self, "_chat_offset", 0))
+        self._right_panel.setGeometry(rx, pad, _RIGHT_W, avail_h)
+        self._right_panel.raise_()
+
+        # Right edge visible to the user (left of Activity Log, or right window edge if chat hidden)
+        right_vis = rx - pad
+
+        # Track starts at x = pad + _slide_offset (slides from +8 to -148).
+        tx = pad + int(getattr(self, "_slide_offset", 0))
+        tw = max(320, right_vis - tx)
+        self._slide_track.setGeometry(tx, pad, tw, avail_h)
+
     def _animate_left_panel(self, collapse: bool) -> None:
-        panel = self._left_panel
-        if self._left_anim is not None:
+        """Slide the connected [System Monitor + Center Board] track left/right
+        as one solid unit. System Monitor moves off-screen left while the board
+        emerges from underneath the Activity Log."""
+        if getattr(self, "_left_anim", None) is not None:
             self._left_anim.stop()
-        lay = panel.layout()
-        if lay is not None:
-            lay.setSizeConstraint(_QLayout.SizeConstraint.SetNoConstraint)
-        panel.setMinimumWidth(0)
-        if not collapse:
-            panel.setMaximumWidth(0)
-            panel.show()
-        anim = QPropertyAnimation(panel, b"maximumWidth", self)
-        anim.setDuration(260)
-        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
-        anim.setStartValue(panel.width() if collapse else 0)
-        anim.setEndValue(0 if collapse else _LEFT_W)
+
+        step = _LEFT_W + 8  # 156 px
+        start_x = int(getattr(self, "_slide_offset", 0))
+        end_x = -step if collapse else 0
+
+        anim = QVariantAnimation(self)
+        anim.setDuration(300)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.setStartValue(start_x)
+        anim.setEndValue(end_x)
+
+        def _step(val) -> None:
+            self._slide_offset = int(val)
+            self._layout_stage()
+
         def _done() -> None:
-            if collapse:
-                panel.hide()
-            else:
-                panel.setFixedWidth(_LEFT_W)
+            self._slide_offset = end_x
+            self._layout_stage()
             self._left_anim = None
+
+        anim.valueChanged.connect(_step)
         anim.finished.connect(_done)
         self._left_anim = anim
         anim.start()
+
     def _animate_right_panel(self, collapse: bool) -> None:
-        panel = self._right_panel
+        """Slide the foreground Activity Log panel off the right edge [Ctrl+H]."""
         if getattr(self, "_right_anim", None) is not None:
             self._right_anim.stop()
-        lay = panel.layout()
-        if lay is not None:
-            lay.setSizeConstraint(_QLayout.SizeConstraint.SetNoConstraint)
-        panel.setMinimumWidth(0)
+
+        step = _RIGHT_W + 8
+        start_x = int(getattr(self, "_chat_offset", 0))
+        end_x = step if collapse else 0
+
         if not collapse:
-            panel.setMaximumWidth(0)
-            panel.show()
-        anim = QPropertyAnimation(panel, b"maximumWidth", self)
-        anim.setDuration(260)
-        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
-        anim.setStartValue(panel.width() if collapse else 0)
-        anim.setEndValue(0 if collapse else _RIGHT_W)
+            self._right_panel.show()
+
+        anim = QVariantAnimation(self)
+        anim.setDuration(280)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.setStartValue(start_x)
+        anim.setEndValue(end_x)
+
+        def _step(val) -> None:
+            self._chat_offset = int(val)
+            self._layout_stage()
+
         def _done() -> None:
+            self._chat_offset = end_x
             if collapse:
-                panel.hide()
-            else:
-                panel.setFixedWidth(_RIGHT_W)
+                self._right_panel.hide()
+            self._layout_stage()
             self._right_anim = None
+
+        anim.valueChanged.connect(_step)
         anim.finished.connect(_done)
         self._right_anim = anim
         anim.start()
+
     def _toggle_right_panel(self) -> None:
         if not self._study_on:
             return
-        is_hidden = (not self._right_panel.isVisible()) or self._right_panel.maximumWidth() == 0
+        is_hidden = getattr(self, "_chat_offset", 0) > 0 or not self._right_panel.isVisible()
         self._animate_right_panel(collapse=not is_hidden)
+
     def _build_study_notepad(self) -> QWidget:
         w = QWidget()
         w.setObjectName("StudyNotepad")
@@ -4580,8 +4510,16 @@ class MainWindow(QMainWindow):
             f"QTextEdit:focus {{ border: 1px solid {_rgba(C.PRI, 0.65)}; }}"
         )
         lay.addWidget(self._study_notepad, stretch=1)
+        self._notepad_text_cached: str = ""
+        self._study_notepad.textChanged.connect(self._sync_notepad_text)
         w.hide()
         return w
+
+    def _sync_notepad_text(self) -> None:
+        """Main GUI thread slot: keeps a thread-safe copy of notepad text."""
+        if hasattr(self, "_study_notepad"):
+            self._notepad_text_cached = self._study_notepad.toPlainText()
+
     def _toggle_study_notepad(self) -> None:
         if not self._study_on:
             return
@@ -4592,6 +4530,7 @@ class MainWindow(QMainWindow):
             total = max(600, self._work_split.width())
             self._work_split.setSizes([int(total * 0.32), int(total * 0.68)])
             self._study_notepad.setFocus()
+
     def _check_study_notes(self) -> None:
         txt = self.get_notepad_text().strip()
         if not txt:
@@ -4605,14 +4544,24 @@ class MainWindow(QMainWindow):
                 f"on the Study Board:\n\n{txt[:3000]}"
             )
             threading.Thread(target=self.on_text_command, args=(msg,), daemon=True).start()
+
     def get_notepad_text(self) -> str:
-        return self._study_notepad.toPlainText() if hasattr(self, "_study_notepad") else ""
+        """Thread-safe: reads cached text without blocking or touching Qt widgets from worker threads."""
+        return getattr(self, "_notepad_text_cached", "")
+
     def set_notepad_text(self, text: str) -> None:
+        """Thread-safe: dispatches update to Qt GUI thread via signal."""
+        self._notepad_set_sig.emit(str(text or ""))
+
+    def _set_notepad_text_slot(self, text: str) -> None:
+        """Main GUI thread slot: updates QTextEdit safely."""
         if hasattr(self, "_study_notepad"):
             self._study_notepad.setPlainText(str(text or ""))
+            self._notepad_text_cached = str(text or "")
             if self._study_on and not self._study_notepad_cont.isVisible():
                 self._toggle_study_notepad()
-    def _set_study_mode(self, on: bool) -> None:
+
+    def _set_study_mode(self, on: bool, notify_voice: bool = True) -> None:
         on = bool(on)
         if on == self._study_on:
             return
@@ -4634,11 +4583,22 @@ class MainWindow(QMainWindow):
                 self._study_notepad_cont.hide()
             if hasattr(self, "_metric_tmr") and not self._metric_tmr.isActive():
                 self._metric_tmr.start(2000)
-            if not self._right_panel.isVisible() or self._right_panel.maximumWidth() == 0:
+            if getattr(self, "_chat_offset", 0) > 0 or not self._right_panel.isVisible():
                 self._animate_right_panel(collapse=False)
             self._hud_cam_stack.setCurrentIndex(0)
         self._animate_left_panel(collapse=on)
         self._log_sig.emit("SYS: Study Station " + ("ON — [Ctrl+H] Chat · [Ctrl+N] Notepad" if on else "OFF"))
+        # Only notify speech if requested (suppressed during programmatic tool executions to avoid WebSocket collision)
+        if notify_voice and getattr(self, "request_say", None):
+            state_note = (
+                "[MODE_SWITCH: STUDY_MODE_ON] The user just switched Study Mode ON (Study Board is now open on screen). "
+                "You are now in STUDY MODE. Adopt your warm, dedicated Teacher/Mentor persona immediately. "
+                "Do not speak unless the user just asked you something."
+                if on else
+                "[MODE_SWITCH: NORMAL_MODE_ON] The user just exited Study Mode and returned to Normal HUD Mode (STUDY_MODE = OFF). "
+                "Switch back to your normal personal assistant persona. Do not speak unless the user just asked you something."
+            )
+            threading.Thread(target=self.request_say, args=(state_note,), daemon=True).start()
 
     def _on_study_board(self, op: str, payload: str) -> None:
         d = json.loads(payload) if payload else {}
@@ -4647,6 +4607,7 @@ class MainWindow(QMainWindow):
             c.show_solution(d.get("title", ""), d.get("markdown", ""),
                             d.get("subject", ""), d.get("reveal", "steps"))
         elif op == "quiz":
+            self._active_quiz_topic = d.get("title", "Practice Quiz")
             c.show_quiz(d.get("title", ""), d.get("questions", []), d.get("subject", ""))
         elif op == "flashcards":
             c.show_flashcards(d.get("title", ""), d.get("cards", []), d.get("subject", ""))
@@ -4656,17 +4617,33 @@ class MainWindow(QMainWindow):
             c.show_status(d.get("text", ""))
         elif op == "next":
             c.next_step()
+        elif op == "prev":
+            c.prev_step()
+        elif op == "restore":
+            c.restore(d.get("target", ""))
         elif op == "clear":
             c.clear()
     def _on_study_event(self, kind: str, data: dict) -> None:
         if kind == "exit":
+            try:
+                from actions import study_quiz
+                study_quiz.set_quiz_active(False)
+            except Exception:
+                pass
             self._set_study_mode(False)
         elif kind == "explain_step" and self.on_text_command:
             msg = (f"Explain step {data.get('n', '')} ({data.get('title', '')}) of the "
                    f"solution on the study board, in simple words.")
             threading.Thread(target=self.on_text_command, args=(msg,), daemon=True).start()
         elif kind == "quiz_complete":
-            topic = data.get("topic", "Quiz")
+            try:
+                from actions import study_quiz
+                study_quiz.set_quiz_active(False)
+            except Exception:
+                pass
+            if data.get("clear"):
+                return
+            topic = str(data.get("topic") or getattr(self, "_active_quiz_topic", "Practice Quiz"))
             score = data.get("score", 0)
             total = data.get("total", 0)
             mistakes = data.get("mistakes") or []
@@ -5721,9 +5698,6 @@ class MainWindow(QMainWindow):
         # they are the two halves of how the mic behaves while JARVIS talks.
         self._barge_btn = _row(cl, QPushButton(), None, self._toggle_barge)
         self._refresh_barge_btn()
-        _group(cl, "Display")
-        self._hud_btn = _row(cl, QPushButton(), None, self._toggle_hud_style)
-        self._refresh_hud_btn()
         cl.addStretch(1)
 
         d = SideDrawer(self.centralWidget())
@@ -6697,41 +6671,6 @@ class MainWindow(QMainWindow):
         self._refresh_barge_btn()
 
 
-    def _refresh_hud_btn(self):
-        from memory.config_manager import get_hud_style
-        face = get_hud_style() == "face"
-        # Neither state is "off", so both read as active — this is a choice
-        # between two things, not a switch with a disabled side.
-        style = f"""
-            QPushButton {{ background: {C.PANEL2}; color: {C.TEXT};
-                border: 1px solid {C.BORDER_A}; border-radius: 6px;
-                text-align: left; padding: 0 12px; }}
-            QPushButton:hover {{ color: {C.WHITE}; border: 1px solid {C.BORDER_B}; }}"""
-        self._hud_btn.setText("🧑  HUD: Animated Face" if face
-                              else "◉  HUD: Reactor Core")
-        self._hud_btn.setStyleSheet(style)
-        self._hud_btn.setToolTip(
-            "An animated head that speaks your words and shows what JARVIS is "
-            "doing. Tap to switch to the reactor core."
-            if face else
-            "A reactor core that turns with the state and moves with your voice. "
-            "Tap to switch to the animated head.")
-
-    def _toggle_hud_style(self):
-        """Swap the centrepiece. Both objects stay in memory, so the change is
-        instant and switching back costs nothing."""
-        from memory.config_manager import get_hud_style, save_hud_style
-        want = "core" if get_hud_style() == "face" else "face"
-        save_hud_style(want)
-        try:
-            self.hud.hud_style = want
-            self.hud.update()
-        except Exception:
-            pass
-        self._refresh_hud_btn()
-        self._log.append_log(
-            "SYS: HUD switched to the animated face." if want == "face"
-            else "SYS: HUD switched to the reactor core.")
 
     def _toggle_ptt(self):
         from memory.config_manager import (get_push_to_talk_enabled,
@@ -7288,6 +7227,14 @@ class JarvisUI:
         return self._win._drop_zone.current_file()
 
     @property
+    def request_say(self):
+        return self._win.request_say
+
+    @request_say.setter
+    def request_say(self, cb):
+        self._win.request_say = cb
+
+    @property
     def on_text_command(self):
         return self._win.on_text_command
 
@@ -7424,12 +7371,8 @@ class JarvisUI:
             pass
 
     def glance(self, dx: float, dy: float, hold: float = 1.1) -> None:
-        """Ask the avatar to look somewhere for a moment (see HoloAvatar.glance)."""
-        try:
-            if self._avatar is not None:
-                self._avatar.glance(dx, dy, hold)
-        except Exception:
-            pass
+        """Compatibility no-op (Arc Reactor HUD does not use head-glance)."""
+        pass
 
     @property
     def ptt_hold(self):
@@ -7464,13 +7407,8 @@ class JarvisUI:
         self._win.get_barge_state = cb
 
     def push_visemes(self, frames, hop: float, at: float) -> None:
-        """Thread-safe: post a schedule of (level, openness, width) mouth frames
-        for JARVIS's own speech. `at` is the wall-clock time the batch begins to
-        sound, not the time of the call. See HudCanvas.push_visemes()."""
-        try:
-            self._win.hud.push_visemes(frames, hop, at)
-        except Exception:
-            pass
+        """Compatibility no-op (Arc Reactor HUD uses direct audio level)."""
+        pass
 
     def notify_phone_connected(self) -> None:
         self._win.notify_phone_connected()
@@ -7527,7 +7465,7 @@ class JarvisUI:
 
     def show_video(self, source: str, title: str = "", muted: bool = True,
                    audio_source: str = "") -> None:
-        """Thread-safe: play a video where the avatar normally is.
+        """Thread-safe: play a video where the reactor core normally is.
 
         `source` is a local path or a direct media URL. `audio_source` is for
         the case where the sound arrives as its own stream — YouTube serves no
@@ -7543,7 +7481,7 @@ class JarvisUI:
                                        bool(muted), str(audio_source or ""))
 
     def stop_video(self) -> None:
-        """Thread-safe: close the video and give the HUD back to the avatar."""
+        """Thread-safe: close the video and give the HUD back to the core."""
         self._win._video_close_sig.emit()
 
     def set_video_muted(self, muted: bool) -> None:
@@ -7563,7 +7501,7 @@ class JarvisUI:
     def study_mode_active(self) -> bool:
         return study_guard.study_active()
 
-    def set_study_mode(self, on: bool) -> None:
+    def set_study_mode(self, on: bool, notify_voice: bool = False) -> None:
         """Thread-safe. The webcam lock is taken HERE, synchronously, so there is
         no gap between "mode on" and "camera refused"; the layout swap follows
         on the Qt thread."""
@@ -7592,8 +7530,11 @@ class JarvisUI:
     def study_next(self) -> None:
         self._study_post("next")
 
-    def study_clear(self) -> None:
-        self._study_post("clear")
+    def study_prev(self) -> None:
+        self._study_post("prev")
+
+    def study_restore(self, target: str = "") -> None:
+        self._study_post("restore", target=target)
 
     def study_clear(self) -> None:
         self._study_post("clear")

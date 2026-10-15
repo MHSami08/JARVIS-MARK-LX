@@ -55,17 +55,6 @@ def _check_python() -> None:
         sys.exit(1)
 
 
-def _check_assets() -> None:
-    """The avatar's face is a shipped file; a truncated clone should say so."""
-    face = HERE / "core" / "face_model.obj"
-    if not face.exists() or face.stat().st_size < 4096:
-        print(
-            "\n⚠️  core/face_model.obj is missing or truncated — the avatar will "
-            "fall back to the plain glowing core.\n"
-            "    Re-clone the repository, or fetch that one file again."
-        )
-
-
 def main() -> None:
     print(f"⚙  MARK LIV setup — detected OS: {OS or 'unknown'}, "
           f"Python {sys.version_info[0]}.{sys.version_info[1]}")

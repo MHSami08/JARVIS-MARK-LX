@@ -1,5 +1,7 @@
 import platform as _platform
 import subprocess as _subprocess
+import os
+os.environ["QT_LOGGING_RULES"] = "qt.text.*=false;qt.text.font.*=false;qt.qpa.*=false;qt.multimedia.*=false;*.debug=false;*.info=false"
 
 # ── Nuclear: force CREATE_NO_WINDOW on EVERY subprocess call on Windows ───────
 # This patches Popen itself, so no per-file flag is needed anywhere.
@@ -649,7 +651,9 @@ class JarvisLive:
         self._sys_monitor      = SystemMonitor()  # persistent cooldown state
         self._proactive        = ProactiveEngine()
         self._last_user_speech = time.monotonic()  # updated on every user utterance
-        self._session_log: list[str] = []          # conversation turns for end-of-session summary
+        self._session_log: list[str] = []
+        self._last_mode_state: bool = study_guard.study_active()          # conversation turns for end-of-session summary
+        self._tool_in_flight: bool = False  # True while a tool call is being executed
 
         self._enhanced_live = True  # proactive audio; auto-disabled if the server rejects it
         self._tuned_live    = True  # turn-taking / media / thinking knobs; same fallback
@@ -841,10 +845,14 @@ class JarvisLive:
 
         async def _say():
             try:
+                is_silent_mode_switch = instruction.lstrip().startswith("[MODE_SWITCH:")
+                self._last_mode_state = study_guard.study_active()
                 await self.session.send_client_content(
                     turns={"role": "user", "parts": [{"text": instruction}]},
-                    turn_complete=True,
+                    turn_complete=not is_silent_mode_switch,
                 )
+                if is_silent_mode_switch:
+                    print(f"[ModeSync] 🔄 F8 / UI Mode switch synced to Live session -> Study={self._last_mode_state}")
             except Exception as e:
                 print(f"[PluginSay] {e}")
 
@@ -934,9 +942,16 @@ class JarvisLive:
         if self._wake_enabled and not self._awake:
             self.ui.write_log("SYS: I'm asleep — say 'Hey Jarvis' or tap WAKE NOW first.")
             return
+        _is_st = study_guard.study_active()
+        self._last_mode_state = _is_st
+        _live_mode = (
+            "[LIVE_STATE: STUDY_MODE = ON (You are currently in Study Mode; act as Dedicated Teacher)]\n"
+            if _is_st else
+            "[LIVE_STATE: NORMAL_MODE = ON (Study Mode is OFF; you are in Normal Assistant HUD Mode, NOT Study Mode)]\n"
+        )
         asyncio.run_coroutine_threadsafe(
             self.session.send_client_content(
-                turns={"role": "user", "parts": [{"text": text}]},
+                turns={"role": "user", "parts": [{"text": _live_mode + text}]},
                 turn_complete=True
             ),
             self._loop
@@ -1154,7 +1169,21 @@ class JarvisLive:
             ),
         })
 
-        parts = [time_ctx, identity_ctx]
+        _is_study = study_guard.study_active()
+        mode_ctx = (
+            "[CURRENT ACTIVE MODE]\n"
+            + (
+                "ACTIVE MODE: STUDY MODE (STUDY_MODE = ON).\n"
+                "You are currently INSIDE the Universal Learning Station (Study Mode). "
+                "The Study Board is open on screen and the webcam is locked off. "
+                "Act as a dedicated, warm, encouraging Professor and Mentor.\n\n"
+                if _is_study else
+                "ACTIVE MODE: NORMAL MODE (STUDY_MODE = OFF).\n"
+                "You are currently in Normal Assistant HUD Mode (Study Mode is OFF). "
+                "Act as a sharp, helpful personal AI assistant.\n\n"
+            )
+        )
+        parts = [time_ctx, identity_ctx, mode_ctx]
         if mem_str:
             parts.append(mem_str)
         parts.append(sys_prompt)
@@ -1257,7 +1286,29 @@ class JarvisLive:
         args = dict(fc.args or {})
 
         print(f"[JARVIS] 🔧 {name}  {args}")
+        self._tool_in_flight = True
+        self.set_speaking(False)
+        if self._turn_done_event:
+            self._turn_done_event.set()
         self.ui.set_state("THINKING")
+
+        # Smart Mode-Gating Guard: Restrict OS-level desktop modification tools during Study Mode
+        if study_guard.study_active():
+            _restricted_in_study = {"code_helper", "dev_agent", "desktop_control"}
+            if name in _restricted_in_study:
+                print(f"[StudyGuard] 🛑 Blocked restricted desktop tool '{name}' during active Study Mode")
+                if not self.ui.muted:
+                    self.ui.set_state("LISTENING")
+                return types.FunctionResponse(
+                    id=fc.id,
+                    name=name,
+                    response={
+                        "result": (
+                            "[MODE_REFUSAL] Study Mode is currently active. Use 'study_solve_problem' to explain "
+                            "code or concepts on the Study Board. Desktop file operations are restricted during study sessions."
+                        )
+                    }
+                )
 
 
         if name == "save_memory":
@@ -1355,21 +1406,17 @@ class JarvisLive:
                     result = "Specify action (add/remove/list) and a topic."
 
             elif name == "shutdown_jarvis":
-                self.ui.write_log("SYS: Shutdown requested.")
+                self.ui.write_log("SYS: Shutting down JARVIS...")
                 async def _do_shutdown():
-                    await self._save_session_summary()
-                    if self.session:
-                        try:
-                            await self.session.send_client_content(
-                                turns={"role": "user", "parts": [{"text": "Say a brief natural goodbye to the user."}]},
-                                turn_complete=True,
-                            )
-                        except Exception:
-                            pass
-                    await asyncio.sleep(1.5)
+                    try:
+                        await asyncio.wait_for(self._save_session_summary(), timeout=2.0)
+                    except Exception:
+                        pass
+                    await asyncio.sleep(1.2)
                     import os as _os
                     _os._exit(0)
                 asyncio.create_task(_do_shutdown())
+                result = "Shutting down now. Say a 2-word goodbye." 
 
             elif self._action_registry.has(name):
                 # file_processor: fall back to the currently-uploaded file when none is given
@@ -1410,7 +1457,9 @@ class JarvisLive:
         except Exception as e:
             result = f"Tool '{name}' failed: {e}"
             traceback.print_exc()
-            self.speak_error(name, e)
+            self.ui.write_log(f"ERR: {name} — {str(e)[:120]}")
+        finally:
+            self._tool_in_flight = False
 
         if not self.ui.muted:
             self.ui.set_state("LISTENING")
@@ -1426,9 +1475,12 @@ class JarvisLive:
         _sched = (self._action_registry.scheduling(name)
                   or self._plugin_registry.scheduling(name))
         _extra = {"scheduling": _sched} if _sched else {}
+        _now_study = study_guard.study_active()
+        self._last_mode_state = _now_study
+        _mode_tag = "[ACTIVE_MODE: STUDY_MODE (ON)] " if _now_study else "[ACTIVE_MODE: NORMAL_MODE (Study Mode is OFF)] "
         return types.FunctionResponse(
             id=fc.id, name=name,
-            response={"result": result},
+            response={"result": f"{_mode_tag}{result}"},
             **_extra
         )
 
@@ -1906,53 +1958,13 @@ class JarvisLive:
                     except asyncio.QueueEmpty:
                         break
 
-                # Drive the HUD waveform and the avatar's mouth from JARVIS's
-                # own voice. The batch is up to 200 ms long, so we hand over a
-                # *schedule* of 20 ms viseme frames instead of a single averaged
-                # level and let the HUD play it out in step with the audio.
+                # Drive the HUD Arc Reactor Core and waveform from JARVIS's own voice
                 try:
                     pcm = np.frombuffer(bytes(batch), dtype=np.int16)
-                    hop = _VIS_HOP / RECEIVE_SAMPLE_RATE
-                    frames = _pcm_visemes(pcm, sr=RECEIVE_SAMPLE_RATE)
-                    # When does this batch become audible? The stream was
-                    # started at launch and its callback has been pulling
-                    # silence ever since, so the first bytes of a reply reach
-                    # the speaker about one callback period later — NOT one
-                    # buffer later. `stream.latency` reports the buffer's
-                    # capacity, which is how much can be queued ahead, and on
-                    # Windows that is commonly 300-500 ms. Anchoring on it put
-                    # the entire schedule a buffer late; that is the half second
-                    # of lag, and it grew with whatever the device reported.
-                    #
-                    # After the anchor nothing needs measuring: the device
-                    # consumes at exactly realtime, so each batch sounds one
-                    # batch-duration after the one before it. The cursor is
-                    # re-anchored only when it leaves the range physically
-                    # possible — behind `now` means the device drained and this
-                    # batch starts a fresh stretch of speech, while further
-                    # ahead than the buffer can hold means it has drifted.
-                    now = time.time()
-                    horizon = self._out_latency + _CURSOR_SLACK
-                    if not (now <= self._play_cursor <= now + horizon):
-                        self._play_cursor = now + _FIRST_SOUND
-                    at = self._play_cursor
-                    # Advance by the batch's own duration whether or not it
-                    # yielded frames, so a block too short to analyse cannot
-                    # shift everything after it out of step with the audio.
-                    self._play_cursor += pcm.size / RECEIVE_SAMPLE_RATE
-                    if frames:
-                        frames = self._visemes.frames(frames, hop)
-                        self.ui.push_visemes(frames, hop, at)
-                        # Barge-in needs to know what we are playing, not just
-                        # how loud: the guard subtracts this from the microphone.
-                        self._out_level = max(f[0] for f in frames)
-                        self._echo.note_output(pcm, RECEIVE_SAMPLE_RATE,
-                                               self._out_level)
-                    else:
-                        lvl = _pcm_level(pcm)
-                        self.ui.set_audio_level(lvl)
-                        self._out_level = lvl
-                        self._echo.note_output(pcm, RECEIVE_SAMPLE_RATE, lvl)
+                    lvl = _pcm_level(pcm)
+                    self.ui.set_audio_level(lvl)
+                    self._out_level = lvl
+                    self._echo.note_output(pcm, RECEIVE_SAMPLE_RATE, lvl)
                 except Exception:
                     pass
 
